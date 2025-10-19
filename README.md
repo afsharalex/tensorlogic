@@ -2,7 +2,7 @@
 
 > **A unified programming language for AI that bridges neural networks and symbolic reasoning through tensor equations**
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![C++](https://img.shields.io/badge/C++-17-blue.svg)](https://isocpp.org/)
 [![CMake](https://img.shields.io/badge/CMake-3.22+-blue.svg)](https://cmake.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.5.1-orange.svg)](https://pytorch.org/)
@@ -146,13 +146,13 @@ cmake --build build --config Release
 
 ## Platform Support
 
-| Platform | Architecture | Status | Notes |
-|----------|--------------|--------|-------|
-| macOS | ARM64 (Apple Silicon) | ✅ Supported | CPU + MPS acceleration |
-| macOS | x86_64 (Intel) | ✅ Supported | CPU only |
-| Linux | x86_64 | ✅ Supported | CPU + CUDA (optional) |
-| Linux | ARM64 | ✅ Supported | CPU only |
-| Windows | x86_64 | ✅ Supported | CPU + CUDA (optional) |
+| Platform | Architecture          | Status      | Notes                  |
+|----------|-----------------------|-------------|------------------------|
+| macOS    | ARM64 (Apple Silicon) | ✅ Supported | CPU + MPS acceleration |
+| macOS    | x86_64 (Intel)        | ✅ Supported | CPU only               |
+| Linux    | x86_64                | ✅ Supported | CPU + CUDA (optional)  |
+| Linux    | ARM64                 | ✅ Supported | CPU only               |
+| Windows  | x86_64                | ✅ Supported | CPU + CUDA (optional)  |
 
 ## CUDA Support
 
@@ -285,7 +285,7 @@ If you use TensorLogic in your research, please cite:
 
 ## Contact
 
-- **Original Paper**: Pedro Domingos - [Tensor Logic: The Language of AI](docs/Tensor%20Logic%20-%20The%20Language%20of%20AI.pdf)
+- **Original Paper**: Pedro Domingos - [Tensor Logic: The Language of AI](Docs/Tensor%20Logic%20-%20The%20Language%20of%20AI.pdf)
 - **Implementation**: Alex Afshar
 - **Issues**: [GitHub Issues](https://github.com/afsharalex/tensorlogic/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/afsharalex/tensorlogic/discussions)
