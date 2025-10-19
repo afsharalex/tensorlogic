@@ -250,7 +250,6 @@
 
 <comment> ::= "//" <any_char_except_newline>* <newline>
             | "/*" <any_char>* "*/"
-            | "#" <any_char_except_newline>* <newline>  (* Python-style *)
 
 (* ========================================
    BASIC LEXICAL ELEMENTS
