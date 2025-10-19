@@ -22,6 +22,9 @@ include(cmake/FetchCatch2.cmake)
 # Main executable
 add_executable(tl
     Source/main.cpp
+    Source/Parser.cpp
+    Source/Lexer.cpp
+    Source/AST.cpp
 )
 
 target_include_directories(tl PRIVATE
