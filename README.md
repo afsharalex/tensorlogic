@@ -24,7 +24,8 @@ See the Grammar in [Docs/Grammar.bnf](Docs/Grammar.bnf).
 
 ## Original Paper
 
-This implementation is based on the paper **["Tensor Logic: The Language of AI"](Docs/Tensor%20Logic%20-%20The%20Language%20of%20AI.pdf)** by **[Pedro Domingos](https://homes.cs.washington.edu/~pedrod/)**.
+This implementation is based on the paper **["Tensor Logic: The Language of AI"](https://arxiv.org/abs/2510.12269)** by **[Pedro Domingos](https://homes.cs.washington.edu/~pedrod/)**.
+Included in Repository here: **["Tensor Logic: The Language of AI"](Docs/Tensor%20Logic%20-%20The%20Language%20of%20AI.pdf)** by **[Pedro Domingos](https://homes.cs.washington.edu/~pedrod/)**.
 
 ## Documentation
 
@@ -275,17 +276,21 @@ MIT - See [LICENSE](LICENSE) for details.
 If you use TensorLogic in your research, please cite:
 
 ```bibtex
-@article{domingos2024tensorlogic,
-  title={Tensor Logic: The Language of AI},
-  author={Domingos, Pedro},
-  year={2024},
-  journal={arXiv preprint}
+@misc{domingos2025tensorlogiclanguageai,
+      title={Tensor Logic: The Language of AI}, 
+      author={Pedro Domingos},
+      year={2025},
+      eprint={2510.12269},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI},
+      url={https://arxiv.org/abs/2510.12269}, 
 }
 ```
 
 ## Contact
 
-- **Original Paper**: Pedro Domingos - [Tensor Logic: The Language of AI](Docs/Tensor%20Logic%20-%20The%20Language%20of%20AI.pdf)
+- **Original Paper**: Pedro Domingos - [https://arxiv.org/abs/2510.12269](https://arxiv.org/abs/2510.12269)
+  - Included in Repository: [Docs/Tensor%20Logic%20-%20The%20Language%20of%20AI.pdf](Docs/Tensor%20Logic%20-%20The%20Language%20of%20AI.pdf)
 - **Implementation**: Alex Afshar
 - **Issues**: [GitHub Issues](https://github.com/afsharalex/tensorlogic/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/afsharalex/tensorlogic/discussions)
@@ -295,4 +300,5 @@ If you use TensorLogic in your research, please cite:
 - Built on [PyTorch (libtorch)](https://pytorch.org/) for tensor operations
 - Uses [PEGTL](https://github.com/taocpp/PEGTL) for parsing
 - Uses [Catch2](https://github.com/catchorg/Catch2) for testing
-- Inspired by the unification of neural and symbolic AI
+- Inspired by the unification of neural and symbolic AI by Pedro Domingos - [https://arxiv.org/abs/2510.12269](https://arxiv.org/abs/2510.12269)
+  - Included in Repository: [Docs/Tensor%20Logic%20-%20The%20Language%20of%20AI.pdf](Docs/Tensor%20Logic%20-%20The%20Language%20of%20AI.pdf)
