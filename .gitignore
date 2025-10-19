@@ -2,6 +2,7 @@
 build/
 builds/
 .cache/
+cmake-build-debug/
 
 # IDE files
 .vscode/
