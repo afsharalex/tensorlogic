@@ -6,11 +6,13 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace tl {
 
-// Simple runtime environment that maps tensor names to concrete Tensor values.
+// Simple runtime environment that maps tensor names to concrete Tensor values
+// and stores simple Datalog facts (as Boolean relations).
 class Environment {
 public:
   void bind(const std::string &name, const Tensor &t);
@@ -24,8 +26,15 @@ public:
 
   static std::string key(const TensorRef &ref);
 
+  // Datalog fact storage helpers (Phase 1 minimal)
+  void addFact(const DatalogFact &f);
+  bool hasRelation(const std::string &relation) const;
+  const std::vector<std::vector<std::string>> &facts(const std::string &relation) const; // empty if missing
+
 private:
   std::unordered_map<std::string, Tensor> tensors_;
+  // Map relation -> list of tuples (each tuple is a vector of constants as strings)
+  std::unordered_map<std::string, std::vector<std::vector<std::string>>> datalog_;
 };
 
 // Minimal router for Phase 1: route tensor equations to LibTorch.
@@ -45,7 +54,7 @@ public:
 
   // Execute a full program. For Phase 1, this executes tensor equations
   // that we can interpret (currently limited to einsum calls with existing
-  // tensors in the environment). Datalog and file ops are stubs.
+  // tensors in the environment). Adds minimal Datalog fact/query support.
   void execute(const Program &program);
 
   // Access the environment (e.g., for tests or embedding)

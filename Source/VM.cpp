@@ -40,6 +40,24 @@ const Tensor &Environment::lookup(const TensorRef &ref) const {
 
 std::string Environment::key(const TensorRef &ref) { return ref.name.name; }
 
+void Environment::addFact(const DatalogFact &f) {
+  std::vector<std::string> tuple;
+  tuple.reserve(f.constants.size());
+  for (const auto &c : f.constants) tuple.push_back(c.text);
+  datalog_[f.relation.name].push_back(std::move(tuple));
+}
+
+bool Environment::hasRelation(const std::string &relation) const {
+  return datalog_.find(relation) != datalog_.end();
+}
+
+const std::vector<std::vector<std::string>> &Environment::facts(const std::string &relation) const {
+  static const std::vector<std::vector<std::string>> kEmpty;
+  auto it = datalog_.find(relation);
+  if (it == datalog_.end()) return kEmpty;
+  return it->second;
+}
+
 // -------- BackendRouter --------
 
 BackendType BackendRouter::analyze(const Statement &st) {
@@ -86,9 +104,21 @@ void TensorLogicVM::execute(const Program &program) {
       execTensorEquation(std::get<TensorEquation>(st));
     } else if (std::holds_alternative<Query>(st)) {
       execQuery(std::get<Query>(st));
+    } else if (std::holds_alternative<DatalogFact>(st)) {
+      const auto &f = std::get<DatalogFact>(st);
+      env_.addFact(f);
+      if (debug_) {
+        std::ostringstream oss;
+        oss << "Added fact: " << f.relation.name << "(";
+        for (size_t i = 0; i < f.constants.size(); ++i) {
+          if (i) oss << ", ";
+          oss << f.constants[i].text;
+        }
+        oss << ")";
+        debugLog(oss.str());
+      }
     } else {
-      // File ops, datalog facts and rules are not handled in Phase 1 VM.
-      // They can be added later; for now we just skip.
+      // File ops and datalog rules are not handled in Phase 1 VM.
       if (debug_) debugLog("Skipping non-tensor statement (not yet implemented)");
     }
   }
@@ -819,7 +849,81 @@ void TensorLogicVM::execQuery(const Query &q) {
       debugLog(oss.str());
     }
   } else {
-    if (debug_) debugLog("Query over Datalog atom (not yet implemented)");
+    const auto &atom = std::get<DatalogAtom>(q.target);
+    const std::string rel = atom.relation.name;
+    if (debug_) {
+      std::ostringstream oss;
+      oss << "Query over Datalog atom: " << rel << "(";
+      for (size_t i = 0; i < atom.terms.size(); ++i) {
+        if (i) oss << ", ";
+        if (std::holds_alternative<Identifier>(atom.terms[i])) oss << std::get<Identifier>(atom.terms[i]).name;
+        else oss << std::get<StringLiteral>(atom.terms[i]).text;
+      }
+      oss << ")?";
+      debugLog(oss.str());
+    }
+
+    // Collect variable positions and names in order of first appearance
+    std::vector<int> varPositions;
+    std::vector<std::string> varNames;
+    std::vector<std::optional<std::string>> constants(atom.terms.size());
+    std::unordered_map<std::string, int> firstPos; // for repeated variable consistency
+
+    for (size_t i = 0; i < atom.terms.size(); ++i) {
+      if (std::holds_alternative<Identifier>(atom.terms[i])) {
+        const std::string &vname = std::get<Identifier>(atom.terms[i]).name;
+        if (!firstPos.count(vname)) {
+          firstPos[vname] = static_cast<int>(i);
+          varPositions.push_back(static_cast<int>(i));
+          varNames.push_back(vname);
+        }
+      } else {
+        constants[i] = std::get<StringLiteral>(atom.terms[i]).text;
+      }
+    }
+
+    const auto &tuples = env_.facts(rel);
+    auto matchesTuple = [&](const std::vector<std::string> &tuple) -> bool {
+      if (tuple.size() != atom.terms.size()) return false;
+      // Check constants
+      for (size_t i = 0; i < constants.size(); ++i) {
+        if (constants[i].has_value() && tuple[i] != *constants[i]) return false;
+      }
+      // Check repeated vars consistency
+      std::unordered_map<std::string, std::string> bind;
+      for (size_t i = 0; i < atom.terms.size(); ++i) {
+        if (std::holds_alternative<Identifier>(atom.terms[i])) {
+          const std::string &vn = std::get<Identifier>(atom.terms[i]).name;
+          auto it = bind.find(vn);
+          if (it == bind.end()) bind.emplace(vn, tuple[i]);
+          else if (it->second != tuple[i]) return false;
+        }
+      }
+      return true;
+    };
+
+    // Ground query (no variables): print True/False
+    if (varNames.empty()) {
+      bool any = false;
+      for (const auto &tup : tuples) { if (matchesTuple(tup)) { any = true; break; } }
+      std::cout << (any ? "True" : "False") << std::endl;
+      return;
+    }
+
+    // Variable bindings: print each matching binding
+    for (const auto &tup : tuples) {
+      if (!matchesTuple(tup)) continue;
+      if (varNames.size() == 1) {
+        std::cout << tup[varPositions[0]] << std::endl;
+      } else {
+        // Print comma-separated values for the variables in first-appearance order
+        for (size_t i = 0; i < varNames.size(); ++i) {
+          if (i) std::cout << ", ";
+          std::cout << tup[varPositions[i]];
+        }
+        std::cout << std::endl;
+      }
+    }
   }
 }
 
