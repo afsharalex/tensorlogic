@@ -42,7 +42,7 @@ private:
         return std::islower(static_cast<unsigned char>(s[0])) != 0;
     }
 
-    [[noreturn]] void errorHere(const std::string& msg) {
+    [[noreturn]] void errorHere(const std::string& msg) const {
         std::ostringstream oss;
         oss << "Parse error at line " << tok_.loc.line << ", col " << tok_.loc.column << ": " << msg;
         throw ParseError(oss.str());
@@ -188,7 +188,8 @@ private:
             return e;
         }
         errorHere("expression expected");
-        return {};
+        // Unreachable
+        // return {};
     }
 
     // term := primary { (('*' | '/') primary) | primary }  // support explicit division and implicit multiplication
@@ -238,7 +239,8 @@ private:
             return parseLowercaseIdentifier();
         }
         errorHere("datalog term expected (variable or constant)");
-        return Identifier{}; // unreachable
+        // Unreachable
+        // return Identifier{};
     }
 
     std::vector<std::variant<Identifier, StringLiteral>> parseDatalogTermList() {
@@ -261,9 +263,9 @@ private:
         DatalogAtom a; a.relation = std::move(rel); a.terms = std::move(terms); a.loc = loc; return a;
     }
 
-    bool allConstants(const DatalogAtom& a) {
-        for (const auto& t : a.terms) if (std::holds_alternative<Identifier>(t)) return false;
-        return true;
+    static bool allConstants(const DatalogAtom& a) {
+        return std::all_of(a.terms.begin(), a.terms.end(),
+                           [](const auto &t) { return !std::holds_alternative<Identifier>(t); });
     }
 
     // Comparison operator acceptance: fills opOut with textual op and consumes token
@@ -307,14 +309,15 @@ private:
             return StringLiteral{n.text, n.loc};
         }
         if (tok_.type == Token::Identifier && startsWithUpper(tok_.text)) {
-            Identifier id = parseIdentifier();
+            const Identifier id = parseIdentifier();
             return StringLiteral{id.name, id.loc};
         }
         errorHere("datalog constant expected (String, Integer, or Uppercase Identifier)");
-        return {};
+        // Unreachable
+        // return {};
     }
 
-    DatalogFact convertAtomToFact(const DatalogAtom& a) {
+    static DatalogFact convertAtomToFact(const DatalogAtom& a) {
         DatalogFact f; f.relation = a.relation; f.loc = a.loc;
         for (const auto& t : a.terms) {
             f.constants.push_back(std::get<StringLiteral>(t));
