@@ -135,13 +135,35 @@ private:
         return lhs;
     }
 
-    // Parse a primary: number | tensor_ref | '(' expr ')'
+    // Parse a primary: number | tensor_ref | '(' expr ')' | list literal [n0, n1, ...]
     ExprPtr parsePrimary() {
         if (tok_.type == Token::LParen) {
             advance();
             auto inner = parseExpr();
             expect(Token::RParen, ")");
             auto e = std::make_shared<Expr>(); e->loc = inner->loc; e->node = ExprParen{inner};
+            return e;
+        }
+        if (tok_.type == Token::LBracket) {
+            // Minimal 1D numeric list literal: [n0, n1, ...]
+            SourceLocation loc = tok_.loc;
+            advance(); // consume '['
+            std::vector<NumberLiteral> elems;
+            if (tok_.type != Token::RBracket) {
+                // first number
+                if (tok_.type != Token::Integer && tok_.type != Token::Float) {
+                    errorHere("number expected in list literal");
+                }
+                elems.push_back(parseNumber());
+                while (accept(Token::Comma)) {
+                    if (tok_.type != Token::Integer && tok_.type != Token::Float) {
+                        errorHere("number expected after comma in list literal");
+                    }
+                    elems.push_back(parseNumber());
+                }
+            }
+            expect(Token::RBracket, "]");
+            auto e = std::make_shared<Expr>(); e->loc = loc; e->node = ExprList{std::move(elems)};
             return e;
         }
         if (tok_.type == Token::Integer || tok_.type == Token::Float) {

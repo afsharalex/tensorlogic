@@ -30,6 +30,15 @@ std::string toString(const Expr& e) {
         std::string operator()(const ExprNumber& n) const { return n.literal.text; }
         std::string operator()(const ExprString& s) const { return '"' + s.literal.text + '"'; }
         std::string operator()(const ExprParen& p) const { return '(' + toString(*p.inner) + ')'; }
+        std::string operator()(const ExprList& lst) const {
+            std::ostringstream oss; oss << '[';
+            for (size_t i = 0; i < lst.elements.size(); ++i) {
+                if (i) oss << ",";
+                oss << lst.elements[i].text;
+            }
+            oss << ']';
+            return oss.str();
+        }
         std::string operator()(const ExprCall& c) const {
             std::ostringstream oss; oss << c.func.name << '(';
             for (size_t i = 0; i < c.args.size(); ++i) {

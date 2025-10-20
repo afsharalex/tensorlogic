@@ -205,7 +205,8 @@ static bool tryLowerIndexedProductToEinsum(const TensorRef& lhs,
   const std::string a = labelsFromRef(leftRef->ref);
   const std::string b = labelsFromRef(rightRef->ref);
   const std::string out = labelsFromRef(lhs);
-  if (a.empty() || b.empty() || out.empty()) return false;
+  if (a.empty() || b.empty()) return false;
+  // Allow scalar outputs: empty 'out' means full contraction
   spec_out = a + "," + b + "->" + out;
 
   // Collect inputs, materializing placeholders as needed
@@ -219,6 +220,74 @@ static bool tryLowerIndexedProductToEinsum(const TensorRef& lhs,
   inputs_out.push_back(env.lookup(rightRef->ref));
 
   return true;
+}
+
+// ---- Expression evaluation ----
+static Tensor evalExpr(const ExprPtr& ep,
+                       const TensorRef& lhsCtx,
+                       Environment& env,
+                       TensorBackend& backend) {
+  if (!ep) throw std::runtime_error("null expression");
+  const Expr& e = *ep;
+
+  if (const auto* num = std::get_if<ExprNumber>(&e.node)) {
+    double v = 0.0; try { v = std::stod(num->literal.text); } catch (...) {}
+    return torch::tensor(static_cast<float>(v));
+  }
+  if (const auto* tr = std::get_if<ExprTensorRef>(&e.node)) {
+    return env.lookup(tr->ref);
+  }
+  if (const auto* par = std::get_if<ExprParen>(&e.node)) {
+    return evalExpr(par->inner, lhsCtx, env, backend);
+  }
+  if (const auto* lst = std::get_if<ExprList>(&e.node)) {
+    std::vector<float> data; data.reserve(lst->elements.size());
+    for (const auto& n : lst->elements) {
+      try { data.push_back(static_cast<float>(std::stod(n.text))); }
+      catch (...) { data.push_back(0.0f); }
+    }
+    return torch::tensor(data);
+  }
+  if (const auto* call = std::get_if<ExprCall>(&e.node)) {
+    // Minimal function support
+    if (call->func.name == "step") {
+      if (call->args.size() != 1) throw std::runtime_error("step() expects 1 argument");
+      Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+      return torch::gt(x, 0).to(torch::kFloat32);
+    } else if (call->func.name == "sqrt") {
+      if (call->args.size() != 1) throw std::runtime_error("sqrt() expects 1 argument");
+      Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+      return torch::sqrt(x);
+    } else if (call->func.name == "abs") {
+      if (call->args.size() != 1) throw std::runtime_error("abs() expects 1 argument");
+      Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+      return torch::abs(x);
+    }
+    throw std::runtime_error("Unsupported function: " + call->func.name);
+  }
+  if (const auto* bin = std::get_if<ExprBinary>(&e.node)) {
+    using Op = ExprBinary::Op;
+    if (bin->op == Op::Mul) {
+      // Prefer einsum lowering for indexed tensor refs
+      std::string spec; std::vector<Tensor> inputs;
+      ExprPtr mulExpr = std::make_shared<Expr>(e); // same node
+      if (tryLowerIndexedProductToEinsum(lhsCtx, mulExpr, spec, inputs, env)) {
+        return backend.einsum(spec, inputs);
+      }
+      Tensor a = evalExpr(bin->lhs, lhsCtx, env, backend);
+      Tensor b = evalExpr(bin->rhs, lhsCtx, env, backend);
+      return a * b;
+    }
+    Tensor a = evalExpr(bin->lhs, lhsCtx, env, backend);
+    Tensor b = evalExpr(bin->rhs, lhsCtx, env, backend);
+    switch (bin->op) {
+      case Op::Add: return a + b;
+      case Op::Sub: return a - b;
+      case Op::Div: return a / b;
+      case Op::Mul: default: return a * b;
+    }
+  }
+  throw std::runtime_error("Unsupported expression node");
 }
 
 // ---- Element-wise assignment helpers ----
@@ -339,6 +408,30 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
     // If indices are not numeric, fallthrough to other handlers
   }
 
+  // Case 2: Vector literal assignment to bare identifier, e.g., W = [1,2,3]
+  if (eq.rhs && eq.lhs.indices.empty()) {
+    const Expr &e = *eq.rhs;
+    if (const auto *lst = std::get_if<ExprList>(&e.node)) {
+      std::vector<float> data;
+      data.reserve(lst->elements.size());
+      for (const auto &num : lst->elements) {
+        try {
+          data.push_back(static_cast<float>(std::stod(num.text)));
+        } catch (...) {
+          data.push_back(0.0f);
+        }
+      }
+      Tensor t = torch::tensor(data);
+      if (debug_) {
+        std::ostringstream oss;
+        oss << "Bind vector literal to " << lhsName << " with length=" << data.size();
+        debugLog(oss.str());
+      }
+      env_.bind(eq.lhs, t);
+      return;
+    }
+  }
+
   // Support explicit einsum("spec", A, B, ...),
   // and implicit indexed products lowered to einsum.
   std::string spec;
@@ -377,6 +470,22 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
     }
     env_.bind(eq.lhs, result);
     return;
+  }
+
+  // General expression evaluation fallback (supports +,-,*,/, step, sqrt, etc.)
+  if (eq.rhs) {
+    try {
+      Tensor val = evalExpr(eq.rhs, eq.lhs, env_, *torch_);
+      if (debug_) {
+        std::ostringstream oss;
+        oss << "Evaluated expression bound to " << lhsName << " with shape=" << val.sizes();
+        debugLog(oss.str());
+      }
+      env_.bind(eq.lhs, val);
+      return;
+    } catch (const std::exception&) {
+      // fall through to other handlers
+    }
   }
 
   // If RHS is a direct tensor ref, treat as identity assignment.

@@ -45,6 +45,8 @@ using ExprPtr = std::shared_ptr<Expr>;
 struct ExprTensorRef { TensorRef ref; };
 struct ExprNumber { NumberLiteral literal; };
 struct ExprString { StringLiteral literal; };
+// Minimal 1D numeric list literal support for Programs/03_*
+struct ExprList { std::vector<NumberLiteral> elements; };
 struct ExprParen { ExprPtr inner; };
 struct ExprCall { Identifier func; std::vector<ExprPtr> args; };
 struct ExprBinary {
@@ -56,7 +58,7 @@ struct ExprBinary {
 
 struct Expr {
     SourceLocation loc{};
-    std::variant<ExprTensorRef, ExprNumber, ExprString, ExprParen, ExprCall, ExprBinary> node;
+    std::variant<ExprTensorRef, ExprNumber, ExprString, ExprList, ExprParen, ExprCall, ExprBinary> node;
 };
 
 // Datalog structures
