@@ -221,9 +221,123 @@ static bool tryLowerIndexedProductToEinsum(const TensorRef& lhs,
   return true;
 }
 
+// ---- Element-wise assignment helpers ----
+static bool parseNumberLiteral(const ExprPtr& ep, double& out) {
+  if (!ep) return false;
+  const Expr* cur = ep.get();
+  while (true) {
+    if (const auto* num = std::get_if<ExprNumber>(&cur->node)) {
+      try {
+        out = std::stod(num->literal.text);
+      } catch (...) { return false; }
+      return true;
+    }
+    if (const auto* par = std::get_if<ExprParen>(&cur->node)) {
+      if (!par->inner) return false;
+      cur = par->inner.get();
+      continue;
+    }
+    return false;
+  }
+}
+
+static bool gatherNumericIndices(const TensorRef& ref, std::vector<int64_t>& idxs) {
+  idxs.clear();
+  for (const auto& idx : ref.indices) {
+    if (const auto* num = std::get_if<NumberLiteral>(&idx.value)) {
+      try {
+        long long v = std::stoll(num->text);
+        if (v < 0) return false;
+        idxs.push_back(static_cast<int64_t>(v));
+      } catch (...) { return false; }
+    } else {
+      return false; // not all numeric
+    }
+  }
+  return true;
+}
+
 void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
+  using torch::indexing::Slice;
+  using torch::indexing::TensorIndex;
   const std::string lhsName = Environment::key(eq.lhs);
   if (debug_) debugLog("Execute TensorEquation: " + lhsName);
+
+  // Case 1: Element-wise numeric assignment, e.g., W[0,1] = 2.0
+  double rhsValue = 0.0;
+  if (parseNumberLiteral(eq.rhs, rhsValue)) {
+    std::vector<int64_t> idxs;
+    if (eq.lhs.indices.empty()) {
+      // Scalar bind
+      Tensor t = torch::tensor(static_cast<float>(rhsValue));
+      if (debug_) {
+        std::ostringstream oss;
+        oss << "Bind scalar " << lhsName << " = " << rhsValue;
+        debugLog(oss.str());
+      }
+      env_.bind(eq.lhs, t);
+      return;
+    } else if (gatherNumericIndices(eq.lhs, idxs)) {
+      // Determine required shape (max(index)+1 per dim)
+      std::vector<int64_t> reqShape;
+      reqShape.reserve(idxs.size());
+      for (int64_t v : idxs) reqShape.push_back(v + 1);
+
+      torch::Tensor t;
+      const auto opts = torch::TensorOptions().dtype(torch::kFloat32);
+      if (!env_.has(lhsName)) {
+        t = torch::zeros(reqShape, opts);
+      } else {
+        torch::Tensor cur = env_.lookup(lhsName);
+        // Grow if needed
+        bool needGrow = static_cast<size_t>(cur.dim()) != reqShape.size();
+        if (!needGrow) {
+          for (int64_t d = 0; d < cur.dim(); ++d) {
+            if (cur.size(d) < reqShape[d]) { needGrow = true; break; }
+          }
+        }
+        if (!needGrow) {
+          t = cur.clone();
+        } else {
+          // New bigger tensor: use max(old, required) per dimension
+          const size_t dims = std::max(static_cast<size_t>(cur.dim()), reqShape.size());
+          std::vector<int64_t> newShape(dims, 1);
+          for (size_t d = 0; d < dims; ++d) {
+            const int64_t oldDim = (d < static_cast<size_t>(cur.dim())) ? cur.size(static_cast<int64_t>(d)) : 1;
+            const int64_t reqDim = (d < reqShape.size()) ? reqShape[d] : 1;
+            newShape[d] = std::max(oldDim, reqDim);
+          }
+          t = torch::zeros(newShape, opts);
+          // Copy overlapping region from old tensor
+          std::vector<TensorIndex> slices;
+          slices.reserve(dims);
+          for (size_t d = 0; d < dims; ++d) {
+            const int64_t len = (d < static_cast<size_t>(cur.dim())) ? cur.size(static_cast<int64_t>(d)) : 1;
+            slices.emplace_back(Slice(0, len));
+          }
+          if (!slices.empty()) {
+            t.index_put_(slices, cur.index(slices));
+          }
+        }
+      }
+      // Write the element
+      std::vector<TensorIndex> elemIdx;
+      elemIdx.reserve(idxs.size());
+      for (int64_t v : idxs) elemIdx.emplace_back(v);
+      t.index_put_(elemIdx, torch::tensor(static_cast<float>(rhsValue), opts));
+
+      if (debug_) {
+        std::ostringstream oss;
+        oss << "Set " << lhsName << "[";
+        for (size_t i = 0; i < idxs.size(); ++i) { if (i) oss << ","; oss << idxs[i]; }
+        oss << "] = " << rhsValue << ", shape now=" << t.sizes();
+        debugLog(oss.str());
+      }
+      env_.bind(lhsName, t);
+      return;
+    }
+    // If indices are not numeric, fallthrough to other handlers
+  }
 
   // Support explicit einsum("spec", A, B, ...),
   // and implicit indexed products lowered to einsum.
@@ -302,13 +416,37 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
 }
 
 void TensorLogicVM::execQuery(const Query &q) {
-  // Phase 1: only support tensor ref query by ensuring it's materialized.
+  using torch::indexing::TensorIndex;
+  // Phase 1: support tensor ref queries and print results
   if (std::holds_alternative<TensorRef>(q.target)) {
     const auto &ref = std::get<TensorRef>(q.target);
     const std::string name = Environment::key(ref);
     if (debug_) debugLog("Query: " + name);
-    // Lookup to trigger error if missing; ignore otherwise.
+    // Lookup (throws if missing)
     const auto &t = env_.lookup(ref);
+
+    // If specific numeric indices provided, print scalar value
+    std::vector<int64_t> idxs;
+    if (!ref.indices.empty() && gatherNumericIndices(ref, idxs)) {
+      std::vector<TensorIndex> elemIdx;
+      elemIdx.reserve(idxs.size());
+      for (int64_t v : idxs) elemIdx.emplace_back(v);
+      torch::Tensor elem = t.index(elemIdx);
+      double val = 0.0;
+      try { val = elem.item<double>(); } catch (...) { val = elem.item<float>(); }
+      std::cout << name << "[";
+      for (size_t i = 0; i < idxs.size(); ++i) { if (i) std::cout << ","; std::cout << idxs[i]; }
+      std::cout << "] = " << val << std::endl;
+      if (debug_) {
+        std::ostringstream oss;
+        oss << "Query tensor present: shape=" << t.sizes();
+        debugLog(oss.str());
+      }
+      return;
+    }
+
+    // Otherwise, print entire tensor
+    std::cout << name << " =\n" << t << std::endl;
     if (debug_) {
       std::ostringstream oss;
       oss << "Query tensor present: shape=" << t.sizes();
