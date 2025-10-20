@@ -15,13 +15,16 @@ include(cmake/FetchLibTorch.cmake)
 include(cmake/FetchCatch2.cmake)
 
 # Enable testing
-# enable_testing()
-# include(CTest)
-# include(Catch)
+enable_testing()
+include(CTest)
+include(Catch)
 
 # Main executable
 add_executable(tl
     Source/main.cpp
+    Source/Parser.cpp
+    Source/Lexer.cpp
+    Source/AST.cpp
 )
 
 target_include_directories(tl PRIVATE
@@ -39,26 +42,30 @@ set_target_properties(tl PROPERTIES
 )
 
 # Test executable
-# add_executable(tl_tests
-#     Tests/Unit/test_index.cpp
-#     Tests/Unit/test_shape.cpp
-#     Tests/Unit/test_type.cpp
-# )
+add_executable(tl_tests
+    Tests/Unit/test_parse_statements.cpp
+    Tests/Integration/test_examples.cpp
+    Source/Parser.cpp
+    Source/Lexer.cpp
+    Source/AST.cpp
+)
 
-# target_include_directories(tl_tests PRIVATE
-#     ${CMAKE_CURRENT_SOURCE_DIR}/Include
-# )
+target_include_directories(tl_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/Include
+)
 
-# target_link_libraries(tl_tests PRIVATE
-#     Catch2::Catch2WithMain
-#     taocpp::pegtl
-#     ${TORCH_LIBRARIES}
-# )
+target_link_libraries(tl_tests PRIVATE
+    Catch2::Catch2WithMain
+    taocpp::pegtl
+    ${TORCH_LIBRARIES}
+)
+
+target_compile_definitions(tl_tests PRIVATE TL_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 # Set RPATH for libtorch shared libraries in tests
-# set_target_properties(tl_tests PROPERTIES
-#     INSTALL_RPATH_USE_LINK_PATH TRUE
-# )
+set_target_properties(tl_tests PROPERTIES
+    INSTALL_RPATH_USE_LINK_PATH TRUE
+)
 
 # Discover tests
-# catch_discover_tests(tl_tests)
+catch_discover_tests(tl_tests)
