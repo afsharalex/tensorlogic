@@ -1,10 +1,11 @@
 #include "TL/AST.hpp"
 #include "TL/Parser.hpp"
 #include "TL/backend.hpp"
+#include "TL/vm.hpp"
 #include <iostream>
 #include <torch/torch.h>
 
-/// Parses, Evaluates/Executes the given '.tl' file (parse-only for now)
+/// Parses, Evaluates/Executes the given '.tl' file
 void runFile(const std::string &fileName) {
   try {
     const tl::Program prog = tl::parseFile(fileName);
@@ -19,8 +20,15 @@ void runFile(const std::string &fileName) {
       }
       std::cout << "  - " << tl::toString(st) << std::endl;
     }
+
+    // Execute program
+    tl::TensorLogicVM vm;
+    vm.execute(prog);
+    std::cout << "Executed program successfully." << std::endl;
   } catch (const tl::ParseError &e) {
     std::cerr << e.what() << std::endl;
+  } catch (const std::exception &e) {
+    std::cerr << "Execution error: " << e.what() << std::endl;
   }
 }
 
