@@ -161,24 +161,46 @@
    Parentheses denote Boolean tensors *)
 <datalog_fact> ::= <relation_name> "(" <constant_list> ")"
 
-<datalog_rule> ::= <atom> "<-" <atom_list>
-                 | <atom> "←" <atom_list>  (* Unicode arrow alternative *)
+<datalog_rule> ::= <atom> "<-" <body_literal_list>
+                 | <atom> "←" <body_literal_list>  (* Unicode arrow alternative *)
 
 <atom> ::= <relation_name> "(" <term_list> ")"
 
-<atom_list> ::= <atom>
-              | <atom> "," <atom_list>
+(* Body literals can be atoms or comparisons *)
+<body_literal_list> ::= <body_literal>
+                      | <body_literal> "," <body_literal_list>
+
+<body_literal> ::= <atom>
+                 | <comparison_literal>
+                 | <negated_literal>
+
+(* Comparison literals for inequality constraints in rules *)
+<comparison_literal> ::= <term> <comparison_op> <term>
+
+(* Negation (for stratified Datalog extensions) *)
+<negated_literal> ::= "not" <atom>
+                    | "!" <atom>
+                    | "¬" <atom>  (* Unicode negation alternative *)
 
 <term_list> ::= <term>
               | <term> "," <term_list>
 
 <term> ::= <variable>
          | <constant>
+         | <arithmetic_term_expr>
+
+(* Arithmetic expressions in terms (for evaluation in constraints) *)
+<arithmetic_term_expr> ::= <term> "+" <term>
+                         | <term> "-" <term>
+                         | <term> "*" <term>
+                         | <term> "/" <term>
+                         | "(" <arithmetic_term_expr> ")"
 
 <variable> ::= <lowercase_identifier>
 
 <constant> ::= <uppercase_identifier>
              | <integer>
+             | <float>
              | <string_literal>
 
 <constant_list> ::= <constant>
@@ -276,9 +298,6 @@
    TENSOR LITERALS (Extension)
    ======================================== *)
 
-<tensor_rhs> ::= <tensor_expression>
-               | <array_literal>
-
 <array_literal> ::= "[" <literal_elements> "]"
                   | "[" <array_rows> "]"  (* for matrices *)
 
@@ -339,6 +358,29 @@ IMPORTANT SEMANTIC RULES:
     - Repeated indices are summed over
     - Non-repeated indices form the output dimensions
     - Join is implicit (no explicit operator needed)
+
+11. DATALOG RULE COMPARISONS:
+    Comparison literals can appear in rule bodies to constrain variable bindings.
+    Examples:
+      Ancestor(x, z) <- Ancestor(x, y), Parent(y, z), x != z
+      Adult(p) <- Age(p, a), a >= 18
+
+    Supported comparison operators: !=, ==, <, >, <=, >=
+
+    Safety requirement: Variables in comparisons must appear in at least one
+    positive atom in the rule body (standard Datalog safety constraint).
+
+12. NEGATION IN RULES:
+    Negation (not, !, ¬) is supported for stratified negation.
+    Safety requirement: All variables in a negated literal must appear in
+    at least one positive atom before the negation.
+    Example: NotAncestor(x, y) <- Person(x), Person(y), not Ancestor(x, y)
+
+13. REFLEXIVE RELATIONSHIPS:
+    Transitive closure rules will derive reflexive relationships when cycles exist,
+    unless explicitly prevented with inequality constraints.
+    Example: Without x != z, the rule Knows(x,z) <- Friend(x,y), Friend(y,z)
+    will derive Knows(Alice, Alice) if Friend(Alice, Bob) and Friend(Bob, Alice) exist.
 *)
 
 (* ========================================
