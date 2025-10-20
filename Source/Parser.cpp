@@ -32,6 +32,7 @@ private:
     Token tok_;
 
     void advance() { tok_ = toks_.consume(); }
+    void skipNewlines() { while (tok_.type == Token::Newline) advance(); }
 
     static bool startsWithUpper(const std::string& s) {
         if (s.empty()) return false;
@@ -120,23 +121,41 @@ private:
 
     // Expressions: term ((+|-) term)*, where term is product of primaries by implicit multiplication
     ExprPtr parseExpr() {
+        skipNewlines();
         auto lhs = parseTerm();
-        while (tok_.type == Token::Plus || tok_.type == Token::Minus) {
-            Token::Type op = tok_.type; advance();
-            auto rhs = parseTerm();
-            auto e = std::make_shared<Expr>();
-            e->loc = lhs->loc;
-            ExprBinary bin;
-            bin.op = (op == Token::Plus) ? ExprBinary::Op::Add : ExprBinary::Op::Sub;
-            bin.lhs = lhs; bin.rhs = rhs;
-            e->node = std::move(bin);
-            lhs = e;
+        while (true) {
+            skipNewlines();
+            if (tok_.type == Token::Plus || tok_.type == Token::Minus) {
+                Token::Type op = tok_.type; advance();
+                skipNewlines();
+                auto rhs = parseTerm();
+                auto e = std::make_shared<Expr>();
+                e->loc = lhs->loc;
+                ExprBinary bin;
+                bin.op = (op == Token::Plus) ? ExprBinary::Op::Add : ExprBinary::Op::Sub;
+                bin.lhs = lhs; bin.rhs = rhs;
+                e->node = std::move(bin);
+                lhs = e;
+                continue;
+            }
+            break;
         }
         return lhs;
     }
 
-    // Parse a primary: number | tensor_ref | '(' expr ')' | list literal [n0, n1, ...]
+    // Parse a primary: number | tensor_ref | '(' expr ')' | list literal [...] | unary '-' primary
     ExprPtr parsePrimary() {
+        // unary minus
+        if (tok_.type == Token::Minus) {
+            SourceLocation loc = tok_.loc;
+            advance();
+            auto rhs = parsePrimary();
+            // build 0 - rhs
+            NumberLiteral zero{"0", loc};
+            auto zeroExpr = std::make_shared<Expr>(); zeroExpr->loc = loc; zeroExpr->node = ExprNumber{zero};
+            auto e = std::make_shared<Expr>(); e->loc = loc; ExprBinary bin; bin.op = ExprBinary::Op::Sub; bin.lhs = zeroExpr; bin.rhs = rhs; e->node = std::move(bin);
+            return e;
+        }
         if (tok_.type == Token::LParen) {
             advance();
             auto inner = parseExpr();
@@ -145,21 +164,14 @@ private:
             return e;
         }
         if (tok_.type == Token::LBracket) {
-            // Minimal 1D numeric list literal: [n0, n1, ...]
+            // Nested list literal: elements are expressions or sublists
             SourceLocation loc = tok_.loc;
             advance(); // consume '['
-            std::vector<NumberLiteral> elems;
+            std::vector<ExprPtr> elems;
             if (tok_.type != Token::RBracket) {
-                // first number
-                if (tok_.type != Token::Integer && tok_.type != Token::Float) {
-                    errorHere("number expected in list literal");
-                }
-                elems.push_back(parseNumber());
+                elems.push_back(parseExpr());
                 while (accept(Token::Comma)) {
-                    if (tok_.type != Token::Integer && tok_.type != Token::Float) {
-                        errorHere("number expected after comma in list literal");
-                    }
-                    elems.push_back(parseNumber());
+                    elems.push_back(parseExpr());
                 }
             }
             expect(Token::RBracket, "]");
@@ -227,6 +239,16 @@ private:
                 auto e = std::make_shared<Expr>();
                 e->loc = lhs->loc;
                 ExprBinary bin; bin.op = ExprBinary::Op::Div; bin.lhs = lhs; bin.rhs = rhs;
+                e->node = std::move(bin);
+                lhs = e;
+                continue;
+            }
+            if (tok_.type == Token::Star) {
+                advance();
+                auto rhs = parsePrimary();
+                auto e = std::make_shared<Expr>();
+                e->loc = lhs->loc;
+                ExprBinary bin; bin.op = ExprBinary::Op::Mul; bin.lhs = lhs; bin.rhs = rhs;
                 e->node = std::move(bin);
                 lhs = e;
                 continue;

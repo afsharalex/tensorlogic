@@ -45,8 +45,8 @@ using ExprPtr = std::shared_ptr<Expr>;
 struct ExprTensorRef { TensorRef ref; };
 struct ExprNumber { NumberLiteral literal; };
 struct ExprString { StringLiteral literal; };
-// Minimal 1D numeric list literal support for Programs/03_*
-struct ExprList { std::vector<NumberLiteral> elements; };
+// List literal: elements may be numbers or nested lists (n-dimensional)
+struct ExprList { std::vector<ExprPtr> elements; };
 struct ExprParen { ExprPtr inner; };
 struct ExprCall { Identifier func; std::vector<ExprPtr> args; };
 struct ExprBinary {

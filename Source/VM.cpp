@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <sstream>
 #include <cctype>
+#include <functional>
 
 namespace tl {
 
@@ -187,6 +188,27 @@ static std::string labelsFromRef(const TensorRef& ref) {
   return s;
 }
 
+// Adapt a bound tensor view to match the number of indices in the reference by
+// squeezing size-1 dimensions or unsqueezing leading dimensions as needed.
+static Tensor adaptTensorToRef(const Tensor& t, const TensorRef& ref) {
+  size_t want = ref.indices.size();
+  int64_t have = t.dim();
+  torch::Tensor r = t;
+  if (have == static_cast<int64_t>(want)) return r;
+  if (have > static_cast<int64_t>(want)) {
+    // Remove all size-1 dims, then check
+    r = r.squeeze();
+    if (r.dim() == static_cast<int64_t>(want)) return r;
+    // If still too many dims, we cannot safely drop non-singleton dims; keep as is
+    return r;
+  }
+  // have < want: add leading singleton dims
+  while (r.dim() < static_cast<int64_t>(want)) {
+    r = r.unsqueeze(0);
+  }
+  return r;
+}
+
 static bool tryLowerIndexedProductToEinsum(const TensorRef& lhs,
                                            const ExprPtr& rhs,
                                            std::string& spec_out,
@@ -213,11 +235,11 @@ static bool tryLowerIndexedProductToEinsum(const TensorRef& lhs,
   inputs_out.clear();
   const std::string leftName = Environment::key(leftRef->ref);
   if (!env.has(leftName)) env.bind(leftRef->ref, placeholderForRef(leftRef->ref));
-  inputs_out.push_back(env.lookup(leftRef->ref));
+  inputs_out.push_back(adaptTensorToRef(env.lookup(leftRef->ref), leftRef->ref));
 
   const std::string rightName = Environment::key(rightRef->ref);
   if (!env.has(rightName)) env.bind(rightRef->ref, placeholderForRef(rightRef->ref));
-  inputs_out.push_back(env.lookup(rightRef->ref));
+  inputs_out.push_back(adaptTensorToRef(env.lookup(rightRef->ref), rightRef->ref));
 
   return true;
 }
@@ -235,33 +257,100 @@ static Tensor evalExpr(const ExprPtr& ep,
     return torch::tensor(static_cast<float>(v));
   }
   if (const auto* tr = std::get_if<ExprTensorRef>(&e.node)) {
-    return env.lookup(tr->ref);
+    return adaptTensorToRef(env.lookup(tr->ref), tr->ref);
   }
   if (const auto* par = std::get_if<ExprParen>(&e.node)) {
     return evalExpr(par->inner, lhsCtx, env, backend);
   }
   if (const auto* lst = std::get_if<ExprList>(&e.node)) {
-    std::vector<float> data; data.reserve(lst->elements.size());
-    for (const auto& n : lst->elements) {
-      try { data.push_back(static_cast<float>(std::stod(n.text))); }
-      catch (...) { data.push_back(0.0f); }
+    // Build n-D tensor from nested list literal
+    // Helper: recursively collect shape and data
+    std::function<void(const ExprPtr&, std::vector<int64_t>&, std::vector<float>&)> collect = [&](const ExprPtr& ep,
+                                                                                                   std::vector<int64_t>& shape_out,
+                                                                                                   std::vector<float>& flat_out){
+      const Expr& ex = *ep;
+      if (const auto* l = std::get_if<ExprList>(&ex.node)) {
+        const size_t n = l->elements.size();
+        std::vector<int64_t> child_shape;
+        bool first = true;
+        for (const auto& child : l->elements) {
+          std::vector<int64_t> cs;
+          collect(child, cs, flat_out);
+          if (first) { child_shape = cs; first = false; }
+          else if (child_shape != cs) {
+            throw std::runtime_error("List literal is not rectangular (sub-shapes differ)");
+          }
+        }
+        shape_out.clear();
+        shape_out.push_back(static_cast<int64_t>(n));
+        shape_out.insert(shape_out.end(), child_shape.begin(), child_shape.end());
+        return;
+      }
+      // Leaf: evaluate numeric expression to scalar
+      Tensor v = evalExpr(ep, lhsCtx, env, backend);
+      if (v.dim() == 0) {
+        flat_out.push_back(v.item<float>());
+        shape_out.clear();
+        return;
+      }
+      if (v.numel() == 1) {
+        flat_out.push_back(v.reshape({}).item<float>());
+        shape_out.clear();
+        return;
+      }
+      throw std::runtime_error("List literal leaf must be a scalar expression");
+    };
+
+    std::vector<float> data;
+    std::vector<int64_t> shape;
+    // Build from the current list expression
+    std::vector<int64_t> top_shape;
+    auto selfPtr = std::make_shared<Expr>(e);
+    collect(selfPtr, top_shape, data);
+    shape = top_shape;
+    if (shape.empty()) {
+      // Degenerate: single scalar list? Return scalar
+      return torch::tensor(data.empty() ? 0.0f : data[0]);
     }
-    return torch::tensor(data);
+    return torch::tensor(data).reshape(shape);
   }
-  if (const auto* call = std::get_if<ExprCall>(&e.node)) {
+if (const auto* call = std::get_if<ExprCall>(&e.node)) {
     // Minimal function support
+    auto need1 = [&](const char* fname){ if (call->args.size() != 1) throw std::runtime_error(std::string(fname) + "() expects 1 argument"); };
     if (call->func.name == "step") {
-      if (call->args.size() != 1) throw std::runtime_error("step() expects 1 argument");
+      need1("step");
       Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
       return torch::gt(x, 0).to(torch::kFloat32);
     } else if (call->func.name == "sqrt") {
-      if (call->args.size() != 1) throw std::runtime_error("sqrt() expects 1 argument");
+      need1("sqrt");
       Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
       return torch::sqrt(x);
     } else if (call->func.name == "abs") {
-      if (call->args.size() != 1) throw std::runtime_error("abs() expects 1 argument");
+      need1("abs");
       Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
       return torch::abs(x);
+    } else if (call->func.name == "sigmoid") {
+      need1("sigmoid");
+      Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+      return torch::sigmoid(x);
+    } else if (call->func.name == "tanh") {
+      need1("tanh");
+      Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+      return torch::tanh(x);
+    } else if (call->func.name == "relu") {
+      need1("relu");
+      Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+      return torch::relu(x);
+    } else if (call->func.name == "exp") {
+      need1("exp");
+      Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+      return torch::exp(x);
+    } else if (call->func.name == "softmax") {
+      need1("softmax");
+      Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+      if (x.dim() == 0) return torch::tensor(1.0f);
+      int64_t dim = std::max<int64_t>(0, x.dim() - 1);
+      return torch::softmax(x, dim);
     }
     throw std::runtime_error("Unsupported function: " + call->func.name);
   }
@@ -408,27 +497,83 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
     // If indices are not numeric, fallthrough to other handlers
   }
 
-  // Case 2: Vector literal assignment to bare identifier, e.g., W = [1,2,3]
+  // Case 2: List literal assignment to bare identifier, e.g., W = [ ... ] or nested lists
   if (eq.rhs && eq.lhs.indices.empty()) {
     const Expr &e = *eq.rhs;
     if (const auto *lst = std::get_if<ExprList>(&e.node)) {
-      std::vector<float> data;
-      data.reserve(lst->elements.size());
-      for (const auto &num : lst->elements) {
-        try {
-          data.push_back(static_cast<float>(std::stod(num.text)));
-        } catch (...) {
-          data.push_back(0.0f);
+      // Reuse nested list builder logic
+      std::function<void(const ExprPtr&, std::vector<int64_t>&, std::vector<float>&)> collect = [&](const ExprPtr& ep,
+                                                                                                    std::vector<int64_t>& shape_out,
+                                                                                                    std::vector<float>& flat_out){
+        const Expr& ex = *ep;
+        if (const auto* l = std::get_if<ExprList>(&ex.node)) {
+          const size_t n = l->elements.size();
+          std::vector<int64_t> child_shape;
+          bool first = true;
+          for (const auto& child : l->elements) {
+            std::vector<int64_t> cs;
+            collect(child, cs, flat_out);
+            if (first) { child_shape = cs; first = false; }
+            else if (child_shape != cs) {
+              throw std::runtime_error("List literal is not rectangular (sub-shapes differ)");
+            }
+          }
+          shape_out.clear();
+          shape_out.push_back(static_cast<int64_t>(n));
+          shape_out.insert(shape_out.end(), child_shape.begin(), child_shape.end());
+          return;
         }
+        // Leaf: evaluate numeric expression to scalar
+        Tensor v = evalExpr(ep, eq.lhs, env_, *torch_);
+        if (v.dim() == 0) {
+          flat_out.push_back(v.item<float>());
+          shape_out.clear();
+          return;
+        }
+        if (v.numel() == 1) {
+          flat_out.push_back(v.reshape({}).item<float>());
+          shape_out.clear();
+          return;
+        }
+        throw std::runtime_error("List literal leaf must be a scalar expression");
+      };
+
+      std::vector<float> data;
+      std::vector<int64_t> top_shape;
+      // Build from 'e' by making a temporary shared_ptr to it
+      auto selfPtr = std::make_shared<Expr>(e);
+      collect(selfPtr, top_shape, data);
+      Tensor t;
+      if (top_shape.empty()) {
+        t = torch::tensor(data.empty() ? 0.0f : data[0]);
+      } else {
+        t = torch::tensor(data).reshape(top_shape);
       }
-      Tensor t = torch::tensor(data);
       if (debug_) {
         std::ostringstream oss;
-        oss << "Bind vector literal to " << lhsName << " with length=" << data.size();
+        oss << "Bind list literal to " << lhsName << " with shape=" << t.sizes();
         debugLog(oss.str());
       }
       env_.bind(eq.lhs, t);
       return;
+    }
+  }
+
+  // Case 3: Reduction assignment like s = Y[i] (sum over i)
+  if (eq.rhs) {
+    const Expr &e = *eq.rhs;
+    if (const auto *eref = std::get_if<ExprTensorRef>(&e.node)) {
+      if (eq.lhs.indices.empty() && !eref->ref.indices.empty()) {
+        const Tensor &src = env_.lookup(eref->ref);
+        Tensor sumAll = torch::sum(src);
+        if (debug_) {
+          std::ostringstream oss;
+          oss << "Reduce sum over all dims of " << Environment::key(eref->ref) << " → scalar bound to " << lhsName;
+          debugLog(oss.str());
+        }
+        env_.bind(eq.lhs, sumAll);
+        return;
+      }
     }
   }
 

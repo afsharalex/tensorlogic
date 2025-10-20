@@ -34,7 +34,7 @@ std::string toString(const Expr& e) {
             std::ostringstream oss; oss << '[';
             for (size_t i = 0; i < lst.elements.size(); ++i) {
                 if (i) oss << ",";
-                oss << lst.elements[i].text;
+                oss << toString(*lst.elements[i]);
             }
             oss << ']';
             return oss.str();
