@@ -27,7 +27,8 @@ public:
   static std::string key(const TensorRef &ref);
 
   // Datalog fact storage helpers (Phase 1 minimal)
-  void addFact(const DatalogFact &f);
+  bool addFact(const DatalogFact &f); // returns true if inserted new fact
+  bool addFact(const std::string &relation, const std::vector<std::string> &tuple); // returns true if new
   bool hasRelation(const std::string &relation) const;
   const std::vector<std::vector<std::string>> &facts(const std::string &relation) const; // empty if missing
 
@@ -35,6 +36,8 @@ private:
   std::unordered_map<std::string, Tensor> tensors_;
   // Map relation -> list of tuples (each tuple is a vector of constants as strings)
   std::unordered_map<std::string, std::vector<std::vector<std::string>>> datalog_;
+  // For fast deduplication: per-relation set of serialized tuples
+  std::unordered_map<std::string, std::unordered_set<std::string>> datalog_set_;
 };
 
 // Minimal router for Phase 1: route tensor equations to LibTorch.
@@ -65,11 +68,17 @@ private:
   void execTensorEquation(const TensorEquation &eq);
   void execQuery(const Query &q);
 
+  // Datalog rules support (Phase 2 minimal): forward-chaining to fixpoint
+  void saturateRules();
+  size_t applyRule(const DatalogRule &rule);
+
   void debugLog(const std::string &msg) const;
 
   std::unique_ptr<TensorBackend> torch_;
   BackendRouter router_;
   Environment env_;
+  std::vector<DatalogRule> rules_;
+  bool closureDirty_{false};
   bool debug_{false};
 };
 

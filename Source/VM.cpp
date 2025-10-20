@@ -40,11 +40,26 @@ const Tensor &Environment::lookup(const TensorRef &ref) const {
 
 std::string Environment::key(const TensorRef &ref) { return ref.name.name; }
 
-void Environment::addFact(const DatalogFact &f) {
+bool Environment::addFact(const std::string &relation, const std::vector<std::string> &tuple) {
+  // Serialize tuple with unit separator for unique key
+  std::string key;
+  for (size_t i = 0; i < tuple.size(); ++i) {
+    if (i) key.push_back('\x1F');
+    key += tuple[i];
+  }
+  auto &setRef = datalog_set_[relation];
+  auto inserted = setRef.insert(key).second;
+  if (inserted) {
+    datalog_[relation].push_back(tuple);
+  }
+  return inserted;
+}
+
+bool Environment::addFact(const DatalogFact &f) {
   std::vector<std::string> tuple;
   tuple.reserve(f.constants.size());
   for (const auto &c : f.constants) tuple.push_back(c.text);
-  datalog_[f.relation.name].push_back(std::move(tuple));
+  return addFact(f.relation.name, tuple);
 }
 
 bool Environment::hasRelation(const std::string &relation) const {
@@ -103,10 +118,13 @@ void TensorLogicVM::execute(const Program &program) {
     if (std::holds_alternative<TensorEquation>(st)) {
       execTensorEquation(std::get<TensorEquation>(st));
     } else if (std::holds_alternative<Query>(st)) {
+      // Ensure closure is up-to-date before answering queries
+      saturateRules();
       execQuery(std::get<Query>(st));
     } else if (std::holds_alternative<DatalogFact>(st)) {
       const auto &f = std::get<DatalogFact>(st);
-      env_.addFact(f);
+      const bool inserted = env_.addFact(f);
+      if (inserted) closureDirty_ = true;
       if (debug_) {
         std::ostringstream oss;
         oss << "Added fact: " << f.relation.name << "(";
@@ -117,8 +135,12 @@ void TensorLogicVM::execute(const Program &program) {
         oss << ")";
         debugLog(oss.str());
       }
+    } else if (std::holds_alternative<DatalogRule>(st)) {
+      rules_.push_back(std::get<DatalogRule>(st));
+      closureDirty_ = true;
+      if (debug_) debugLog("Registered Datalog rule");
     } else {
-      // File ops and datalog rules are not handled in Phase 1 VM.
+      // File ops not yet implemented
       if (debug_) debugLog("Skipping non-tensor statement (not yet implemented)");
     }
   }
@@ -811,6 +833,99 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
   if (debug_) debugLog("RHS not supported yet; statement skipped");
 }
 
+void TensorLogicVM::saturateRules() {
+  if (!closureDirty_ || rules_.empty()) return;
+  size_t totalNew = 0;
+  size_t iter = 0;
+  while (true) {
+    size_t roundNew = 0;
+    for (const auto &r : rules_) {
+      roundNew += applyRule(r);
+    }
+    totalNew += roundNew;
+    ++iter;
+    if (roundNew == 0) break;
+  }
+  if (debug_) {
+    std::ostringstream oss;
+    oss << "Rule saturation finished after fixpoint.";
+    debugLog(oss.str());
+  }
+  closureDirty_ = false;
+}
+
+size_t TensorLogicVM::applyRule(const DatalogRule &rule) {
+  // Collect body atoms; ignore non-atom conditions for now (not used in 09_ examples)
+  std::vector<DatalogAtom> bodyAtoms;
+  bodyAtoms.reserve(rule.body.size());
+  for (const auto &el : rule.body) {
+    if (const auto *a = std::get_if<DatalogAtom>(&el)) bodyAtoms.push_back(*a);
+  }
+  if (bodyAtoms.empty()) return 0;
+
+  size_t newCount = 0;
+
+  // Depth-first join over body atoms
+  std::unordered_map<std::string, std::string> binding;
+  std::function<void(size_t)> dfs = [&](size_t idx) {
+    if (idx == bodyAtoms.size()) {
+      // Build head tuple
+      std::vector<std::string> headTuple;
+      headTuple.reserve(rule.head.terms.size());
+      for (const auto &t : rule.head.terms) {
+        if (std::holds_alternative<StringLiteral>(t)) {
+          headTuple.push_back(std::get<StringLiteral>(t).text);
+        } else {
+          const std::string &vn = std::get<Identifier>(t).name;
+          auto it = binding.find(vn);
+          if (it == binding.end()) {
+            // Unsafe variable in head: skip
+            return;
+          }
+          headTuple.push_back(it->second);
+        }
+      }
+      if (env_.addFact(rule.head.relation.name, headTuple)) {
+        ++newCount;
+      }
+      return;
+    }
+
+    const DatalogAtom &atom = bodyAtoms[idx];
+    const auto &tuples = env_.facts(atom.relation.name);
+    for (const auto &tup : tuples) {
+      if (tup.size() != atom.terms.size()) continue;
+      // Local modifications to binding; keep a list to rollback
+      std::vector<std::string> assignedVars;
+      bool ok = true;
+      for (size_t i = 0; i < atom.terms.size(); ++i) {
+        const auto &term = atom.terms[i];
+        const std::string &val = tup[i];
+        if (std::holds_alternative<StringLiteral>(term)) {
+          if (std::get<StringLiteral>(term).text != val) { ok = false; break; }
+        } else {
+          const std::string &vn = std::get<Identifier>(term).name;
+          auto it = binding.find(vn);
+          if (it == binding.end()) {
+            binding.emplace(vn, val);
+            assignedVars.push_back(vn);
+          } else if (it->second != val) {
+            ok = false; break;
+          }
+        }
+      }
+      if (ok) {
+        dfs(idx + 1);
+      }
+      // rollback
+      for (const auto &vn : assignedVars) binding.erase(vn);
+    }
+  };
+
+  dfs(0);
+  return newCount;
+}
+
 void TensorLogicVM::execQuery(const Query &q) {
   using torch::indexing::TensorIndex;
   // Phase 1: support tensor ref queries and print results
@@ -911,10 +1026,12 @@ void TensorLogicVM::execQuery(const Query &q) {
     }
 
     // Variable bindings: print each matching binding
+    bool anyPrinted = false;
     for (const auto &tup : tuples) {
       if (!matchesTuple(tup)) continue;
       if (varNames.size() == 1) {
         std::cout << tup[varPositions[0]] << std::endl;
+        anyPrinted = true;
       } else {
         // Print comma-separated values for the variables in first-appearance order
         for (size_t i = 0; i < varNames.size(); ++i) {
@@ -922,7 +1039,11 @@ void TensorLogicVM::execQuery(const Query &q) {
           std::cout << tup[varPositions[i]];
         }
         std::cout << std::endl;
+        anyPrinted = true;
       }
+    }
+    if (!anyPrinted) {
+      std::cout << "None" << std::endl;
     }
   }
 }
