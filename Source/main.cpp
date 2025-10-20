@@ -1,18 +1,22 @@
-#include <iostream>
-#include <fstream>
-#include <torch/torch.h>
-#include "TL/Parser.hpp"
 #include "TL/AST.hpp"
+#include "TL/Parser.hpp"
+#include "TL/backend.hpp"
+#include <iostream>
+#include <torch/torch.h>
 
 /// Parses, Evaluates/Executes the given '.tl' file (parse-only for now)
 void runFile(const std::string &fileName) {
   try {
     const tl::Program prog = tl::parseFile(fileName);
-    std::cout << "Parsed program: " << prog.statements.size() << " statement(s)" << std::endl;
+    std::cout << "Parsed program: " << prog.statements.size() << " statement(s)"
+              << std::endl;
     // Print a short preview
     size_t count = 0;
     for (const auto &st : prog.statements) {
-      if (count++ >= 10) { std::cout << "..." << std::endl; break; }
+      if (count++ >= 10) {
+        std::cout << "..." << std::endl;
+        break;
+      }
       std::cout << "  - " << tl::toString(st) << std::endl;
     }
   } catch (const tl::ParseError &e) {
@@ -20,15 +24,14 @@ void runFile(const std::string &fileName) {
   }
 }
 
-/// Prints a demo of tensors
-void printTensorsDemo(const torch::Tensor &/*tensor*/) {
-  // Demo function to print tensors, check if libtorch is working
-  const torch::Tensor x = torch::rand({3, 3});
-  const torch::Tensor y = torch::rand({3, 3});
-  const torch::Tensor z = torch::rand({3, 3});
-  std::cout << x << std::endl;
-  std::cout << y << std::endl;
-  std::cout << z << std::endl;
+/// Prints a demo of backend einsum to validate LibTorch backend
+void printBackendEinsumDemo() {
+  auto backend = tl::BackendFactory::create(tl::BackendType::LibTorch);
+  const torch::Tensor a = torch::rand({3, 4});
+  const torch::Tensor b = torch::rand({4, 5});
+
+  const auto res = backend->einsum("ik,kj->ij", {a, b});
+  std::cout << "Einsum result (3x5):\n" << res << std::endl;
 }
 
 int main(const int argc, char **argv) {
@@ -49,8 +52,8 @@ int main(const int argc, char **argv) {
   } else {
     // TODO: Start REPL
 
-    // Print demo tensors
-    printTensorsDemo(torch::rand({3, 3}));
+    // Backend einsum demo
+    printBackendEinsumDemo();
   }
 
   return 0;
