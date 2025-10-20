@@ -180,12 +180,19 @@ static std::string labelsFromRef(const TensorRef& ref) {
     if (const auto* id = std::get_if<Identifier>(&idx.value)) {
       if (!id->name.empty()) s.push_back(id->name[0]);
     } else if (const auto* num = std::get_if<NumberLiteral>(&idx.value)) {
-      // Numeric indices do not have labels in einsum; use placeholder letters
-      // This is a simplification for early examples (which use letter indices)
+      // Numeric indices should not be lowered into einsum labels in our VM.
+      // We handle numeric indices via direct indexing instead.
       (void)num; s.push_back('x');
     }
   }
   return s;
+}
+
+static bool hasNumericIndices(const TensorRef& ref) {
+  for (const auto& idx : ref.indices) {
+    if (std::holds_alternative<NumberLiteral>(idx.value)) return true;
+  }
+  return false;
 }
 
 // Adapt a bound tensor view to match the number of indices in the reference by
@@ -209,6 +216,32 @@ static Tensor adaptTensorToRef(const Tensor& t, const TensorRef& ref) {
   return r;
 }
 
+// Return the value referenced by a TensorRef, applying numeric indices as
+// integer indexing (which reduces rank), and leaving symbolic indices as slices.
+static Tensor valueForRef(const TensorRef& ref, Environment& env) {
+  using torch::indexing::Slice;
+  using torch::indexing::TensorIndex;
+  // Lookup base tensor
+  torch::Tensor base = env.lookup(ref);
+  // Ensure at least as many dims as indices by unsqueezing leading dims
+  while (base.dim() < static_cast<int64_t>(ref.indices.size())) {
+    base = base.unsqueeze(0);
+  }
+  if (ref.indices.empty()) return base;
+  std::vector<TensorIndex> idx;
+  idx.reserve(ref.indices.size());
+  for (const auto& ind : ref.indices) {
+    if (const auto* num = std::get_if<NumberLiteral>(&ind.value)) {
+      long long v = 0;
+      try { v = std::stoll(num->text); } catch (...) { v = 0; }
+      idx.emplace_back(static_cast<int64_t>(v));
+    } else {
+      idx.emplace_back(Slice());
+    }
+  }
+  return base.index(idx);
+}
+
 static bool tryLowerIndexedProductToEinsum(const TensorRef& lhs,
                                            const ExprPtr& rhs,
                                            std::string& spec_out,
@@ -222,6 +255,11 @@ static bool tryLowerIndexedProductToEinsum(const TensorRef& lhs,
   const auto* leftRef  = asExprTensorRef(bin->lhs);
   const auto* rightRef = asExprTensorRef(bin->rhs);
   if (!leftRef || !rightRef) return false;
+
+  // Do not lower if any numeric indices are present; handle via direct indexing instead
+  if (hasNumericIndices(leftRef->ref) || hasNumericIndices(rightRef->ref) || hasNumericIndices(lhs)) {
+    return false;
+  }
 
   // Build einsum spec like "ij,jk->ik"
   const std::string a = labelsFromRef(leftRef->ref);
@@ -257,7 +295,7 @@ static Tensor evalExpr(const ExprPtr& ep,
     return torch::tensor(static_cast<float>(v));
   }
   if (const auto* tr = std::get_if<ExprTensorRef>(&e.node)) {
-    return adaptTensorToRef(env.lookup(tr->ref), tr->ref);
+    return valueForRef(tr->ref, env);
   }
   if (const auto* par = std::get_if<ExprParen>(&e.node)) {
     return evalExpr(par->inner, lhsCtx, env, backend);
@@ -621,6 +659,80 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
   if (eq.rhs) {
     try {
       Tensor val = evalExpr(eq.rhs, eq.lhs, env_, *torch_);
+
+      // If LHS has fully numeric indices, treat as element-wise assignment using RHS value
+      std::vector<int64_t> idxs_assign;
+      if (!eq.lhs.indices.empty() && gatherNumericIndices(eq.lhs, idxs_assign)) {
+        // Ensure destination tensor exists and is large enough
+        std::vector<int64_t> reqShape;
+        reqShape.reserve(idxs_assign.size());
+        for (int64_t v : idxs_assign) reqShape.push_back(v + 1);
+        torch::Tensor t;
+        const auto opts = torch::TensorOptions().dtype(torch::kFloat32);
+        if (!env_.has(lhsName)) {
+          t = torch::zeros(reqShape, opts);
+        } else {
+          torch::Tensor cur = env_.lookup(lhsName);
+          bool needGrow = static_cast<size_t>(cur.dim()) != reqShape.size();
+          if (!needGrow) {
+            for (int64_t d = 0; d < cur.dim(); ++d) {
+              if (cur.size(d) < reqShape[d]) { needGrow = true; break; }
+            }
+          }
+          if (!needGrow) {
+            t = cur.clone();
+          } else {
+            const size_t dims = std::max(static_cast<size_t>(cur.dim()), reqShape.size());
+            std::vector<int64_t> newShape(dims, 1);
+            for (size_t d = 0; d < dims; ++d) {
+              const int64_t oldDim = (d < static_cast<size_t>(cur.dim())) ? cur.size(static_cast<int64_t>(d)) : 1;
+              const int64_t reqDim = (d < reqShape.size()) ? reqShape[d] : 1;
+              newShape[d] = std::max(oldDim, reqDim);
+            }
+            t = torch::zeros(newShape, opts);
+            // Copy overlapping region
+            using torch::indexing::Slice; using torch::indexing::TensorIndex;
+            std::vector<TensorIndex> slices; slices.reserve(dims);
+            for (size_t d = 0; d < dims; ++d) {
+              const int64_t len = (d < static_cast<size_t>(cur.dim())) ? cur.size(static_cast<int64_t>(d)) : 1;
+              slices.emplace_back(Slice(0, len));
+            }
+            if (!slices.empty()) {
+              t.index_put_(slices, cur.index(slices));
+            }
+          }
+        }
+        // Ensure RHS is scalar; if not, reduce to scalar by sum
+        if (val.dim() > 0) {
+          if (val.numel() == 1) val = val.reshape({});
+          else val = torch::sum(val);
+        }
+        // Write element
+        using torch::indexing::TensorIndex;
+        std::vector<TensorIndex> elemIdx; elemIdx.reserve(idxs_assign.size());
+        for (int64_t v : idxs_assign) elemIdx.emplace_back(v);
+        t.index_put_(elemIdx, val.to(opts.dtype()))
+         ;
+        if (debug_) {
+          std::ostringstream oss;
+          oss << "Element-wise assign from expression: set " << lhsName << "[";
+          for (size_t i = 0; i < idxs_assign.size(); ++i) { if (i) oss << ","; oss << idxs_assign[i]; }
+          oss << "] = " << val.item<float>() << ", shape now=" << t.sizes();
+          debugLog(oss.str());
+        }
+        env_.bind(lhsName, t);
+        return;
+      }
+
+      // If LHS is scalar but RHS evaluated to a tensor, auto-reduce by summing all dims
+      if (eq.lhs.indices.empty() && val.dim() > 0) {
+        if (debug_) {
+          std::ostringstream oss;
+          oss << "Auto-reduce RHS to scalar via sum over all dims; original shape=" << val.sizes();
+          debugLog(oss.str());
+        }
+        val = torch::sum(val);
+      }
       if (debug_) {
         std::ostringstream oss;
         oss << "Evaluated expression bound to " << lhsName << " with shape=" << val.sizes();
