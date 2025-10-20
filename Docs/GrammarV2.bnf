@@ -1,0 +1,346 @@
+(* ========================================
+   TENSOR LOGIC - COMPLETE BNF GRAMMAR
+   Corrected and Extended Version
+   ======================================== *)
+
+(* ========================================
+   TOP LEVEL CONSTRUCTS
+   ======================================== *)
+
+<program> ::= <statement>*
+
+<statement> ::= <tensor_equation>
+              | <datalog_fact>
+              | <datalog_rule>
+              | <query>
+              | <file_operation>
+              | <comment>
+
+(* ========================================
+   FILE OPERATIONS
+   ======================================== *)
+
+<file_operation> ::= <tensor_ref> "=" <file_literal>
+                   | <file_literal> "=" <tensor_ref>
+
+<file_literal> ::= "file(" <string_literal> ")"
+                 | <string_literal>  (* Direct string interpreted as filename *)
+
+(* ========================================
+   TENSOR EQUATIONS
+   ======================================== *)
+
+<tensor_equation> ::= <tensor_lhs> <projection_op> <tensor_rhs>
+
+<tensor_lhs> ::= <identifier> "[" <index_list> "]"
+               | <identifier>  (* scalar case *)
+
+<tensor_rhs> ::= <tensor_expression>
+
+<tensor_expression> ::= <conditional_expression>
+                      | <nonlinearity_call>
+                      | <tensor_term>
+                      | <tensor_expression> "+" <tensor_term>
+                      | <tensor_expression> "-" <tensor_term>
+                      | <comparison_expression>
+
+(* Conditional/weighted expressions for pattern matching *)
+<conditional_expression> ::= <condition> <tensor_expression>
+
+<condition> ::= <function_name> "(" <term> ")"
+              (* Examples: Even(d), Odd(d), or any boolean predicate *)
+
+(* Comparison expressions for hybrid reasoning *)
+<comparison_expression> ::= <tensor_expression> <comparison_op> <tensor_expression>
+
+<comparison_op> ::= ">" | "<" | ">=" | "<=" | "==" | "!="
+
+<tensor_term> ::= <tensor_factor>
+                | <tensor_term> <tensor_factor>  (* implicit join/multiplication *)
+
+<tensor_factor> ::= <tensor_ref>
+                  | <scalar_literal>
+                  | <arithmetic_expression>
+                  | "(" <tensor_expression> ")"
+
+<tensor_ref> ::= <identifier> "[" <index_list> "]"
+               | <identifier> "[" <slice_list> "]"
+               | <identifier>  (* scalar or zero-rank tensor *)
+               | <identifier> "(" <term_list> ")"  (* Boolean tensor in Datalog syntax *)
+
+(* ========================================
+   INDICES
+   ======================================== *)
+
+<index_list> ::= <index>
+               | <index> "," <index_list>
+
+<index> ::= <simple_index>
+          | <virtual_index>
+          | <normalized_index>
+          | <index_expression>
+
+<simple_index> ::= <identifier>
+
+(* Virtual index (not allocated in memory) *)
+<virtual_index> ::= "*" <identifier>
+
+(* Normalized index (for softmax, etc.)
+   The dot after the identifier indicates that normalization
+   should be performed over this dimension *)
+<normalized_index> ::= <identifier> "."
+
+(* Index with arithmetic - extended for complex expressions *)
+<index_expression> ::= <arith_index_term>
+                     | <index_expression> "+" <arith_index_term>
+                     | <index_expression> "-" <arith_index_term>
+
+<arith_index_term> ::= <arith_index_factor>
+                     | <arith_index_term> "*" <arith_index_factor>
+                     | <arith_index_term> "/" <arith_index_factor>
+
+<arith_index_factor> ::= <identifier>
+                       | <integer>
+                       | <float>
+                       | <arith_index_factor> "^" <arith_index_factor>  (* exponentiation *)
+                       | "(" <index_expression> ")"
+                       | <function_name> "(" <index_expression> ")"
+
+(* ========================================
+   PROJECTION OPERATORS
+   ======================================== *)
+
+<projection_op> ::= "="      (* default: sum *)
+                  | "+="     (* explicit sum *)
+                  | "max="   (* max pooling *)
+                  | "avg="   (* average pooling *)
+                  | "min="   (* min pooling *)
+
+(* Note: Multiple equations with the same LHS are implicitly summed.
+   Example: A[i] = B[i] and A[i] = C[i] is equivalent to A[i] = B[i] + C[i] *)
+
+(* ========================================
+   SLICING
+   ======================================== *)
+
+<slice_list> ::= <slice>
+               | <slice> "," <slice_list>
+
+<slice> ::= <index>
+          | <integer> ":" <integer>                    (* start:end *)
+          | <integer> ":" <integer> ":" <integer>      (* start:end:step *)
+          | ":"                                         (* all elements *)
+          | ":" <integer>                               (* :end *)
+          | <integer> ":"                               (* start: *)
+
+(* ========================================
+   NONLINEARITIES / FUNCTIONS
+   ======================================== *)
+
+<nonlinearity_call> ::= <function_name> "(" <tensor_expression> ")"
+                      | <function_name> "(" <argument_list> ")"
+
+<function_name> ::= "relu" | "sigmoid" | "tanh" | "softmax"
+                  | "step" | "H"  (* Heaviside step function *)
+                  | "exp" | "log" | "sqrt"
+                  | "sin" | "cos" | "tan"
+                  | "lnorm"  (* layer normalization *)
+                  | "concat"
+                  | "sig"    (* sigmoid abbreviation *)
+                  | "Even" | "Odd"  (* conditional predicates *)
+                  | <identifier>  (* user-defined or procedural attachment *)
+
+<argument_list> ::= <tensor_expression>
+                  | <tensor_expression> "," <argument_list>
+
+(* ========================================
+   DATALOG CONSTRUCTS
+   ======================================== *)
+
+(* Datalog fact - uses parentheses instead of brackets
+   Parentheses denote Boolean tensors *)
+<datalog_fact> ::= <relation_name> "(" <constant_list> ")"
+
+<datalog_rule> ::= <atom> "<-" <atom_list>
+                 | <atom> "←" <atom_list>  (* Unicode arrow alternative *)
+
+<atom> ::= <relation_name> "(" <term_list> ")"
+
+<atom_list> ::= <atom>
+              | <atom> "," <atom_list>
+
+<term_list> ::= <term>
+              | <term> "," <term_list>
+
+<term> ::= <variable>
+         | <constant>
+
+<variable> ::= <lowercase_identifier>
+
+<constant> ::= <uppercase_identifier>
+             | <integer>
+             | <string_literal>
+
+<constant_list> ::= <constant>
+                  | <constant> "," <constant_list>
+
+(* ========================================
+   QUERIES
+   ======================================== *)
+
+<query> ::= <atom> "?"
+          | <identifier> "?"
+          | <tensor_ref> "?"
+
+(* ========================================
+   ARITHMETIC EXPRESSIONS
+   ======================================== *)
+
+<arithmetic_expression> ::= <arithmetic_term>
+                          | <arithmetic_expression> "+" <arithmetic_term>
+                          | <arithmetic_expression> "-" <arithmetic_term>
+
+<arithmetic_term> ::= <arithmetic_factor>
+                    | <arithmetic_term> "*" <arithmetic_factor>
+                    | <arithmetic_term> "/" <arithmetic_factor>
+
+<arithmetic_factor> ::= <scalar_literal>
+                      | <identifier>
+                      | <arithmetic_factor> "^" <arithmetic_factor>  (* exponentiation *)
+                      | "(" <arithmetic_expression> ")"
+                      | <function_name> "(" <arithmetic_expression> ")"
+                      | "-" <arithmetic_factor>  (* unary minus *)
+
+(* ========================================
+   LITERALS AND IDENTIFIERS
+   ======================================== *)
+
+<scalar_literal> ::= <number>
+                   | <boolean>
+
+<number> ::= <integer>
+           | <float>
+
+<integer> ::= <digit>+
+            | "-" <digit>+
+
+<float> ::= <digit>+ "." <digit>*
+          | <digit>* "." <digit>+
+          | "-" <digit>+ "." <digit>*
+          | "-" <digit>* "." <digit>+
+          | <digit>+ ("e" | "E") ("+" | "-")? <digit>+
+          | "-" <digit>+ ("e" | "E") ("+" | "-")? <digit>+
+
+<boolean> ::= "true" | "false" | "True" | "False"
+
+<string_literal> ::= '"' <string_char>* '"'
+                   | "'" <string_char>* "'"
+
+<identifier> ::= <letter> (<letter> | <digit> | "_")*
+
+<lowercase_identifier> ::= <lowercase_letter> (<letter> | <digit> | "_")*
+
+<uppercase_identifier> ::= <uppercase_letter> (<letter> | <digit> | "_")*
+
+<relation_name> ::= <uppercase_identifier>
+
+(* ========================================
+   COMMENTS
+   ======================================== *)
+
+<comment> ::= "//" <any_char_except_newline>* <newline>
+            | "/*" <any_char>* "*/"
+
+(* ========================================
+   BASIC LEXICAL ELEMENTS
+   ======================================== *)
+
+<letter> ::= <uppercase_letter> | <lowercase_letter>
+
+<uppercase_letter> ::= "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I"
+                     | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R"
+                     | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z"
+
+<lowercase_letter> ::= "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i"
+                     | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r"
+                     | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z"
+
+<digit> ::= "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+
+<string_char> ::= <any_char_except_quote_or_backslash>
+                | "\\" <escape_sequence>
+
+<escape_sequence> ::= "n" | "t" | "r" | "\\" | '"' | "'" | "0"
+
+(* ========================================
+   TENSOR LITERALS (Extension)
+   ======================================== *)
+
+<tensor_rhs> ::= <tensor_expression>
+               | <array_literal>
+
+<array_literal> ::= "[" <literal_elements> "]"
+                  | "[" <array_rows> "]"  (* for matrices *)
+
+<literal_elements> ::= <number>
+                     | <number> "," <literal_elements>
+
+<array_rows> ::= <array_literal>
+               | <array_literal> "," <array_rows>
+
+(* ========================================
+   SEMANTIC NOTES
+   ======================================== *)
+
+(*
+IMPORTANT SEMANTIC RULES:
+
+1. IMPLICIT SUMMATION:
+   Multiple equations with the same left-hand side are implicitly summed.
+   Example:
+     A[i] = B[i]
+     A[i] = C[i]
+   Is equivalent to: A[i] = B[i] + C[i]
+
+2. DEFAULT VALUES:
+   Tensor elements are 0 by default unless explicitly set.
+
+3. BOOLEAN TENSORS:
+   Tensors denoted with parentheses instead of square brackets are Boolean.
+   Example: Neig(x, y) is equivalent to Boolean Neig[x, y]
+
+4. VIRTUAL INDICES:
+   Indices prefixed with * are virtual (not allocated in memory).
+   Successive values are written to the same location.
+   Example: X[i, *t+1] overwrites the same memory location for each t.
+
+5. NORMALIZED INDICES:
+   Indices suffixed with . indicate normalization (e.g., softmax) over that dimension.
+   Example: Comp[p, p'.] means apply softmax over the p' dimension for each p.
+
+6. PROJECTION:
+   Indices appearing on the RHS but not on the LHS are summed over (projected out).
+   Example: Y[i] = W[i, j] X[j]  (j is summed over)
+
+7. JOIN:
+   Tensors appearing on the RHS are joined (element-wise multiplied).
+   Repeated indices indicate which dimensions to join on.
+
+8. FILE I/O:
+   Setting a tensor equal to a file reads the file into the tensor.
+   Setting a file equal to a tensor writes the tensor to the file.
+   Text files are read as Boolean matrices: M[position, word] = 1 if word at position.
+
+9. TYPE INFERENCE:
+   Tensor types may be declared explicitly or inferred from usage.
+
+10. EINSUM SEMANTICS:
+    Tensor equations follow Einstein summation convention:
+    - Repeated indices are summed over
+    - Non-repeated indices form the output dimensions
+    - Join is implicit (no explicit operator needed)
+*)
+
+(* ========================================
+   END OF GRAMMAR
+   ======================================== *)
