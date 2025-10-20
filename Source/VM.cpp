@@ -854,12 +854,103 @@ void TensorLogicVM::saturateRules() {
   closureDirty_ = false;
 }
 
+// Helper: evaluate a simple expression into either numeric or string based on current Datalog bindings
+static bool evalExprBinding(const ExprPtr &e,
+                            const std::unordered_map<std::string, std::string> &binding,
+                            std::string &outStr,
+                            double &outNum,
+                            bool &isNumeric) {
+  if (!e) return false;
+  const Expr &ex = *e;
+  if (const auto *num = std::get_if<ExprNumber>(&ex.node)) {
+    outStr = num->literal.text;
+    try { outNum = std::stod(outStr); isNumeric = true; } catch (...) { isNumeric = false; }
+    return true;
+  }
+  if (const auto *str = std::get_if<ExprString>(&ex.node)) {
+    outStr = str->literal.text;
+    try { outNum = std::stod(outStr); isNumeric = true; } catch (...) { isNumeric = false; }
+    return true;
+  }
+  if (const auto *tr = std::get_if<ExprTensorRef>(&ex.node)) {
+    // Treat lowercase scalar identifiers (no indices) as Datalog variables
+    const std::string &name = tr->ref.name.name;
+    const bool isVar = tr->ref.indices.empty() && !name.empty() && std::islower(static_cast<unsigned char>(name[0])) != 0;
+    if (isVar) {
+      auto it = binding.find(name);
+      if (it == binding.end()) return false; // unbound
+      outStr = it->second;
+      try { outNum = std::stod(outStr); isNumeric = true; } catch (...) { isNumeric = false; }
+      return true;
+    }
+    // Otherwise unsupported in condition
+    return false;
+  }
+  if (const auto *paren = std::get_if<ExprParen>(&ex.node)) {
+    return evalExprBinding(paren->inner, binding, outStr, outNum, isNumeric);
+  }
+  if (const auto *bin = std::get_if<ExprBinary>(&ex.node)) {
+    // Minimal arithmetic support if both sides numeric
+    std::string ls; double ln = 0; bool lnum = false;
+    std::string rs; double rn = 0; bool rnum = false;
+    if (!evalExprBinding(bin->lhs, binding, ls, ln, lnum)) return false;
+    if (!evalExprBinding(bin->rhs, binding, rs, rn, rnum)) return false;
+    if (!lnum || !rnum) return false;
+    double res = 0;
+    switch (bin->op) {
+      case ExprBinary::Op::Add: res = ln + rn; break;
+      case ExprBinary::Op::Sub: res = ln - rn; break;
+      case ExprBinary::Op::Mul: res = ln * rn; break;
+      case ExprBinary::Op::Div: if (rn == 0.0) return false; res = ln / rn; break;
+    }
+    outNum = res; isNumeric = true;
+    std::ostringstream oss; oss << res; outStr = oss.str();
+    return true;
+  }
+  // Lists and calls not supported in conditions
+  return false;
+}
+
+static bool evalCondition(const DatalogCondition &cond,
+                          const std::unordered_map<std::string, std::string> &binding) {
+  std::string ls, rs; double ln = 0, rn = 0; bool lnum = false, rnum = false;
+  if (!evalExprBinding(cond.lhs, binding, ls, ln, lnum)) return false;
+  if (!evalExprBinding(cond.rhs, binding, rs, rn, rnum)) return false;
+
+  auto doStrCmp = [&](const std::string &op) {
+    if (op == "==") return ls == rs;
+    if (op == "!=") return ls != rs;
+    if (op == ">") return ls > rs;
+    if (op == "<") return ls < rs;
+    if (op == ">=") return ls >= rs;
+    if (op == "<=") return ls <= rs;
+    return false;
+  };
+
+  if ((cond.op == "==" || cond.op == "!=") && (!lnum || !rnum)) {
+    return doStrCmp(cond.op);
+  }
+  if (lnum && rnum) {
+    if (cond.op == "==") return ln == rn;
+    if (cond.op == "!=") return ln != rn;
+    if (cond.op == ">") return ln > rn;
+    if (cond.op == "<") return ln < rn;
+    if (cond.op == ">=") return ln >= rn;
+    if (cond.op == "<=") return ln <= rn;
+    return false;
+  }
+  // Mixed types with ordering: fallback to string compare
+  return doStrCmp(cond.op);
+}
+
 size_t TensorLogicVM::applyRule(const DatalogRule &rule) {
-  // Collect body atoms; ignore non-atom conditions for now (not used in 09_ examples)
+  // Collect body atoms and conditions
   std::vector<DatalogAtom> bodyAtoms;
+  std::vector<DatalogCondition> conditions;
   bodyAtoms.reserve(rule.body.size());
   for (const auto &el : rule.body) {
     if (const auto *a = std::get_if<DatalogAtom>(&el)) bodyAtoms.push_back(*a);
+    else if (const auto *c = std::get_if<DatalogCondition>(&el)) conditions.push_back(*c);
   }
   if (bodyAtoms.empty()) return 0;
 
@@ -869,6 +960,10 @@ size_t TensorLogicVM::applyRule(const DatalogRule &rule) {
   std::unordered_map<std::string, std::string> binding;
   std::function<void(size_t)> dfs = [&](size_t idx) {
     if (idx == bodyAtoms.size()) {
+      // Evaluate conditions as filters
+      for (const auto &cond : conditions) {
+        if (!evalCondition(cond, binding)) return; // reject this binding
+      }
       // Build head tuple
       std::vector<std::string> headTuple;
       headTuple.reserve(rule.head.terms.size());
@@ -965,6 +1060,99 @@ void TensorLogicVM::execQuery(const Query &q) {
     }
   } else {
     const auto &atom = std::get<DatalogAtom>(q.target);
+
+    // If this is a conjunctive Datalog query with optional comparisons, evaluate via join
+    if (!q.body.empty()) {
+      // Separate atoms and conditions; ensure first element is included already
+      std::vector<DatalogAtom> atoms;
+      std::vector<DatalogCondition> conditions;
+      atoms.reserve(q.body.size());
+      for (const auto &el : q.body) {
+        if (const auto *a = std::get_if<DatalogAtom>(&el)) atoms.push_back(*a);
+        else if (const auto *c = std::get_if<DatalogCondition>(&el)) conditions.push_back(*c);
+      }
+      if (atoms.empty()) {
+        std::cout << "None" << std::endl;
+        return;
+      }
+
+      // Determine variable output order across atoms by first appearance
+      std::vector<std::string> varNames;
+      std::unordered_set<std::string> seen;
+      for (const auto &a : atoms) {
+        for (const auto &t : a.terms) {
+          if (const auto *id = std::get_if<Identifier>(&t)) {
+            const std::string &vn = id->name;
+            if (!vn.empty() && std::islower(static_cast<unsigned char>(vn[0])) != 0) {
+              if (!seen.count(vn)) { seen.insert(vn); varNames.push_back(vn); }
+            }
+          }
+        }
+      }
+
+      // DFS join similar to rules
+      std::unordered_map<std::string, std::string> binding;
+      bool anyPrinted = false;
+
+      std::function<void(size_t)> dfs = [&](size_t idx) {
+        if (idx == atoms.size()) {
+          // Evaluate conditions
+          for (const auto &cond : conditions) {
+            if (!evalCondition(cond, binding)) return;
+          }
+          if (varNames.empty()) {
+            std::cout << "True" << std::endl;
+            anyPrinted = true;
+            return;
+          }
+          if (varNames.size() == 1) {
+            std::cout << binding[varNames[0]] << std::endl;
+            anyPrinted = true;
+          } else {
+            for (size_t i = 0; i < varNames.size(); ++i) {
+              if (i) std::cout << ", ";
+              std::cout << binding[varNames[i]];
+            }
+            std::cout << std::endl;
+            anyPrinted = true;
+          }
+          return;
+        }
+        const DatalogAtom &a = atoms[idx];
+        const auto &tuples = env_.facts(a.relation.name);
+        for (const auto &tup : tuples) {
+          if (tup.size() != a.terms.size()) continue;
+          std::vector<std::string> assigned;
+          bool ok = true;
+          for (size_t i = 0; i < a.terms.size(); ++i) {
+            const auto &term = a.terms[i];
+            const std::string &val = tup[i];
+            if (std::holds_alternative<StringLiteral>(term)) {
+              if (std::get<StringLiteral>(term).text != val) { ok = false; break; }
+            } else {
+              const std::string &vn = std::get<Identifier>(term).name;
+              auto it = binding.find(vn);
+              if (it == binding.end()) { binding.emplace(vn, val); assigned.push_back(vn); }
+              else if (it->second != val) { ok = false; break; }
+            }
+          }
+          if (ok) dfs(idx + 1);
+          for (const auto &vn : assigned) binding.erase(vn);
+        }
+      };
+
+      dfs(0);
+      if (!anyPrinted) {
+        // Ground conjunctive query with no satisfying assignment
+        if (varNames.empty()) {
+          std::cout << "False" << std::endl;
+        } else {
+          std::cout << "None" << std::endl;
+        }
+      }
+      return;
+    }
+
     const std::string rel = atom.relation.name;
     if (debug_) {
       std::ostringstream oss;

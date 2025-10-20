@@ -336,6 +336,8 @@ private:
     }
 
     std::variant<DatalogAtom, DatalogCondition> parseRuleBodyElement() {
+        // Allow body elements to span lines
+        skipNewlines();
         // Decide based on lookahead: Uppercase Identifier followed by '(' means atom
         if (tok_.type == Token::Identifier && startsWithUpper(tok_.text) && toks_.peek().type == Token::LParen) {
             return parseAtom();
@@ -373,7 +375,7 @@ private:
         // Possible Datalog atom/rule/fact at statement start
         if (tok_.type == Token::Identifier && tok_.text != "file" && toks_.peek().type == Token::LParen && startsWithUpper(tok_.text)) {
             DatalogAtom head = parseAtom();
-            // Datalog query: Atom?
+            // Datalog query: Atom? or Atom, body...? (conjunctive query with comparisons)
             if (accept(Token::Question)) {
                 Query q; q.target = head; q.loc = head.loc; return q;
             }
@@ -384,6 +386,18 @@ private:
                 while (accept(Token::Comma)) body.push_back(parseRuleBodyElement());
                 DatalogRule r; r.head = std::move(head); r.body = std::move(body); r.loc = r.head.loc;
                 return r;
+            }
+            // Datalog conjunctive query: Atom, (Atom|Condition) ... ?
+            if (tok_.type == Token::Comma) {
+                std::vector<std::variant<DatalogAtom, DatalogCondition>> conj;
+                // include the first atom
+                conj.push_back(head);
+                do {
+                    advance(); // consume ','
+                    conj.push_back(parseRuleBodyElement());
+                } while (tok_.type == Token::Comma);
+                expect(Token::Question, "'?' to end query");
+                Query q; q.target = head; q.body = std::move(conj); q.loc = head.loc; return q;
             }
             // else, treat as fact if constants only
             if (allConstants(head)) {

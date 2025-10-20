@@ -86,9 +86,15 @@ struct FileOperation {
     SourceLocation loc{};
 };
 
+// Forward declaration to allow Query to reference DatalogCondition
+struct DatalogCondition;
+
 struct Query {
     // Support queries over tensor refs and Datalog atoms
+    // Additionally, for Datalog queries, we may allow a conjunction of atoms and comparisons.
     std::variant<TensorRef, DatalogAtom> target;
+    // If non-empty, represents a conjunctive query of atoms/conditions; the first element is usually the same as `target` when `target` holds a DatalogAtom.
+    std::vector<std::variant<DatalogAtom, DatalogCondition>> body;
     SourceLocation loc{};
 };
 
