@@ -39,6 +39,10 @@ class TensorLogicVM {
 public:
   TensorLogicVM();
 
+  // Enable/disable debug logging
+  void setDebug(bool enabled);
+  bool debug() const;
+
   // Execute a full program. For Phase 1, this executes tensor equations
   // that we can interpret (currently limited to einsum calls with existing
   // tensors in the environment). Datalog and file ops are stubs.
@@ -52,9 +56,12 @@ private:
   void execTensorEquation(const TensorEquation &eq);
   void execQuery(const Query &q);
 
+  void debugLog(const std::string &msg) const;
+
   std::unique_ptr<TensorBackend> torch_;
   BackendRouter router_;
   Environment env_;
+  bool debug_{false};
 };
 
 } // namespace tl

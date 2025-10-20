@@ -2,6 +2,10 @@
 
 #include <stdexcept>
 #include <torch/torch.h>
+#include <iostream>
+#include <cstdlib>
+#include <sstream>
+#include <cctype>
 
 namespace tl {
 
@@ -49,10 +53,34 @@ BackendType BackendRouter::analyze(const Statement &st) {
 
 TensorLogicVM::TensorLogicVM() {
   torch_ = BackendFactory::create(BackendType::LibTorch);
+  if (const char* env = std::getenv("TL_DEBUG")) {
+    std::string v = env;
+    for (auto &c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (v == "1" || v == "true" || v == "yes" || v == "on") {
+      debug_ = true;
+    }
+  }
+}
+
+void TensorLogicVM::setDebug(bool enabled) { debug_ = enabled; }
+bool TensorLogicVM::debug() const { return debug_; }
+void TensorLogicVM::debugLog(const std::string &msg) const {
+  if (debug_) {
+    std::cout << "[VM] " << msg << std::endl;
+  }
 }
 
 void TensorLogicVM::execute(const Program &program) {
-  for (const auto &st : program.statements) {
+  for (size_t i = 0; i < program.statements.size(); ++i) {
+    const auto &st = program.statements[i];
+    if (debug_) {
+      debugLog("Stmt " + std::to_string(i) + ": " + toString(st));
+    }
+    const BackendType be = router_.analyze(st);
+    if (debug_) {
+      debugLog(std::string("Router selected backend: ") + (be == BackendType::LibTorch ? "LibTorch" : "Unknown"));
+    }
+
     if (std::holds_alternative<TensorEquation>(st)) {
       execTensorEquation(std::get<TensorEquation>(st));
     } else if (std::holds_alternative<Query>(st)) {
@@ -60,6 +88,7 @@ void TensorLogicVM::execute(const Program &program) {
     } else {
       // File ops, datalog facts and rules are not handled in Phase 1 VM.
       // They can be added later; for now we just skip.
+      if (debug_) debugLog("Skipping non-tensor statement (not yet implemented)");
     }
   }
 }
@@ -193,13 +222,45 @@ static bool tryLowerIndexedProductToEinsum(const TensorRef& lhs,
 }
 
 void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
+  const std::string lhsName = Environment::key(eq.lhs);
+  if (debug_) debugLog("Execute TensorEquation: " + lhsName);
+
   // Support explicit einsum("spec", A, B, ...),
   // and implicit indexed products lowered to einsum.
   std::string spec;
   std::vector<Tensor> inputs;
-  if (tryParseEinsumCall(eq.rhs, spec, inputs, env_) ||
-      tryLowerIndexedProductToEinsum(eq.lhs, eq.rhs, spec, inputs, env_)) {
+  bool lowered = false;
+  if (tryParseEinsumCall(eq.rhs, spec, inputs, env_)) {
+    if (debug_) {
+      std::ostringstream oss;
+      oss << "Parsed explicit einsum: '" << spec << "' with inputs=";
+      for (size_t i = 0; i < inputs.size(); ++i) {
+        const auto &t = inputs[i];
+        oss << (i ? "," : "") << t.sizes();
+      }
+      debugLog(oss.str());
+    }
+    lowered = true;
+  } else if (tryLowerIndexedProductToEinsum(eq.lhs, eq.rhs, spec, inputs, env_)) {
+    if (debug_) {
+      std::ostringstream oss;
+      oss << "Lowered indexed product to einsum: '" << spec << "' with inputs=";
+      for (size_t i = 0; i < inputs.size(); ++i) {
+        const auto &t = inputs[i];
+        oss << (i ? "," : "") << t.sizes();
+      }
+      debugLog(oss.str());
+    }
+    lowered = true;
+  }
+
+  if (lowered) {
     const Tensor result = torch_->einsum(spec, inputs);
+    if (debug_) {
+      std::ostringstream oss;
+      oss << "Result of einsum bound to " << lhsName << " with shape=" << result.sizes();
+      debugLog(oss.str());
+    }
     env_.bind(eq.lhs, result);
     return;
   }
@@ -211,23 +272,50 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
       const std::string srcName = Environment::key(eref->ref);
       if (!env_.has(srcName)) {
         // Materialize a placeholder tensor for unbound source
+        const auto dims = shapeFromRef(eref->ref);
+        if (debug_) {
+          std::ostringstream oss;
+          oss << "Materialize placeholder for " << srcName << " with shape=";
+          oss << "[";
+          for (size_t i = 0; i < dims.size(); ++i) {
+            if (i) oss << "x";
+            oss << dims[i];
+          }
+          oss << "]";
+          debugLog(oss.str());
+        }
         env_.bind(eref->ref, placeholderForRef(eref->ref));
       }
       const auto &src = env_.lookup(eref->ref);
+      if (debug_) {
+        std::ostringstream oss;
+        oss << "Identity bind: " << lhsName << " = " << srcName << " shape=" << src.sizes();
+        debugLog(oss.str());
+      }
       env_.bind(eq.lhs, src);
       return;
     }
   }
 
   // Fallback: not supported yet, just ignore (Phase 1 skeleton)
+  if (debug_) debugLog("RHS not supported yet; statement skipped");
 }
 
 void TensorLogicVM::execQuery(const Query &q) {
   // Phase 1: only support tensor ref query by ensuring it's materialized.
   if (std::holds_alternative<TensorRef>(q.target)) {
     const auto &ref = std::get<TensorRef>(q.target);
+    const std::string name = Environment::key(ref);
+    if (debug_) debugLog("Query: " + name);
     // Lookup to trigger error if missing; ignore otherwise.
-    (void)env_.lookup(ref);
+    const auto &t = env_.lookup(ref);
+    if (debug_) {
+      std::ostringstream oss;
+      oss << "Query tensor present: shape=" << t.sizes();
+      debugLog(oss.str());
+    }
+  } else {
+    if (debug_) debugLog("Query over Datalog atom (not yet implemented)");
   }
 }
 

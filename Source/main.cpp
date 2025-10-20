@@ -6,7 +6,7 @@
 #include <torch/torch.h>
 
 /// Parses, Evaluates/Executes the given '.tl' file
-void runFile(const std::string &fileName) {
+void runFile(const std::string &fileName, bool debug) {
   try {
     const tl::Program prog = tl::parseFile(fileName);
     std::cout << "Parsed program: " << prog.statements.size() << " statement(s)"
@@ -23,6 +23,7 @@ void runFile(const std::string &fileName) {
 
     // Execute program
     tl::TensorLogicVM vm;
+    vm.setDebug(debug);
     vm.execute(prog);
     std::cout << "Executed program successfully." << std::endl;
   } catch (const tl::ParseError &e) {
@@ -44,10 +45,24 @@ void printBackendEinsumDemo() {
 
 int main(const int argc, char **argv) {
 
+  // Parse optional flags
+  bool debug = false;
+  int argi = 1;
+  while (argi < argc && argv[argi][0] == '-') {
+    std::string opt = argv[argi];
+    if (opt == "--debug" || opt == "-d") {
+      debug = true;
+      ++argi;
+      continue;
+    }
+    std::cerr << "Unknown option: " << opt << "\n";
+    std::cerr << "Usage: tl [--debug|-d] <file.tl>\n";
+    return 1;
+  }
+
   // Check if a file name was provided
-  if (argc > 1) {
-    // Get file name
-    const std::string fileName = argv[1];
+  if (argi < argc) {
+    const std::string fileName = argv[argi];
 
     // Check file extension is .tl
     if (fileName.size() < 3 || fileName.substr(fileName.size() - 3) != ".tl") {
@@ -56,7 +71,7 @@ int main(const int argc, char **argv) {
     }
 
     // Run file
-    runFile(fileName);
+    runFile(fileName, debug);
   } else {
     // TODO: Start REPL
 
