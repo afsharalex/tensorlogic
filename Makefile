@@ -16,7 +16,7 @@ run: build
 	./build/tl
 
 run_examples: build
-	find Examples -name "*.tl" -exec ./build/tl {} \;
+	find Examples/ParseTests -name "*.tl" -exec ./build/tl {} \;
 
 clean:
 	rm -rf build
