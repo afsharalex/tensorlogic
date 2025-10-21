@@ -7,6 +7,8 @@
 #include <sstream>
 #include <cctype>
 #include <functional>
+#include <fstream>
+#include <filesystem>
 
 namespace tl {
 
@@ -139,8 +141,142 @@ void TensorLogicVM::execute(const Program &program) {
       rules_.push_back(std::get<DatalogRule>(st));
       closureDirty_ = true;
       if (debug_) debugLog("Registered Datalog rule");
+    } else if (std::holds_alternative<FileOperation>(st)) {
+      const auto &fo = std::get<FileOperation>(st);
+      auto resolvePath = [](const std::string &p)->std::filesystem::path {
+        std::filesystem::path path(p);
+        if (path.is_absolute()) return path;
+        // Try as-is relative to CWD
+        const std::filesystem::path cwd = std::filesystem::current_path();
+        std::filesystem::path candidate = cwd / path;
+        if (std::filesystem::exists(candidate)) return candidate;
+        // TODO: Should we throw here?
+        // Fall back to as-is
+        return candidate;
+      };
+
+      auto readTensorFromFile = [&](const std::string &p)->Tensor {
+        const std::filesystem::path rp = resolvePath(p);
+        std::ifstream ifs(rp);
+        if (!ifs) throw std::runtime_error("Cannot open file for reading: " + rp.string());
+        std::vector<std::string> lines;
+        std::string line;
+        while (std::getline(ifs, line)) {
+          // Trim CR and whitespace at both ends
+          while (!line.empty() && (line.back()=='\r' || line.back()=='\n' || line.back()==' ' || line.back()=='\t')) line.pop_back();
+          size_t start = 0; while (start < line.size() && (line[start]==' ' || line[start]=='\t')) ++start;
+          if (start > 0) line = line.substr(start);
+          if (line.empty()) continue;
+          lines.push_back(line);
+        }
+        if (lines.empty()) {
+          return torch::zeros({0});
+        }
+        bool hasComma = false;
+        for (const auto &ln : lines) { if (ln.find(',') != std::string::npos) { hasComma = true; break; } }
+        if (hasComma) {
+          // Parse as 2D CSV
+          std::vector<float> values;
+          size_t cols = 0;
+          for (const auto &ln : lines) {
+            std::vector<float> row;
+            size_t pos = 0;
+            while (pos <= ln.size()) {
+              size_t comma = ln.find(',', pos);
+              const std::string tok = (comma == std::string::npos) ? ln.substr(pos) : ln.substr(pos, comma - pos);
+              if (!tok.empty()) {
+                row.push_back(static_cast<float>(std::stod(tok)));
+              } else {
+                row.push_back(0.0f);
+              }
+              if (comma == std::string::npos) break;
+              pos = comma + 1;
+            }
+            if (cols == 0) cols = row.size();
+            if (row.size() != cols) throw std::runtime_error("CSV has inconsistent number of columns in: " + rp.string());
+            values.insert(values.end(), row.begin(), row.end());
+          }
+          const int64_t rows = static_cast<int64_t>(lines.size());
+          const int64_t c = static_cast<int64_t>(cols);
+          torch::Tensor t = torch::from_blob(values.data(), {rows, c}, torch::TensorOptions().dtype(torch::kFloat32)).clone();
+          return t;
+        } else {
+          // Treat as 1D: one number per non-empty line
+          std::vector<float> values;
+          values.reserve(lines.size());
+          for (const auto &ln : lines) {
+            values.push_back(static_cast<float>(std::stod(ln)));
+          }
+          const int64_t n = static_cast<int64_t>(values.size());
+          torch::Tensor t = torch::from_blob(values.data(), {n}, torch::TensorOptions().dtype(torch::kFloat32)).clone();
+          return t;
+        }
+      };
+
+      auto writeTensorToFile = [&](const std::string &p, const Tensor &t) {
+        std::filesystem::path rp = resolvePath(p);
+        // Ensure directory exists
+        std::filesystem::path parent = rp.parent_path();
+        if (!parent.empty()) {
+          std::error_code ec; std::filesystem::create_directories(parent, ec);
+        }
+        std::ofstream ofs(rp);
+        if (!ofs) throw std::runtime_error("Cannot open file for writing: " + rp.string());
+        const torch::Tensor contig = t.contiguous();
+        if (contig.dim() == 0) {
+          double v = 0.0; try { v = contig.item<double>(); } catch (...) { v = contig.item<float>(); }
+          ofs << v << "\n";
+          return;
+        }
+        if (contig.dim() == 1) {
+          const int64_t n = contig.size(0);
+          for (int64_t i = 0; i < n; ++i) {
+            double v = 0.0; try { v = contig[i].item<double>(); } catch (...) { v = contig[i].item<float>(); }
+            ofs << v;
+            if (i + 1 < n) ofs << "\n";
+          }
+          return;
+        }
+        if (contig.dim() == 2) {
+          const int64_t r = contig.size(0);
+          const int64_t c = contig.size(1);
+          for (int64_t i = 0; i < r; ++i) {
+            for (int64_t j = 0; j < c; ++j) {
+              double v = 0.0; try { v = contig[i][j].item<double>(); } catch (...) { v = contig[i][j].item<float>(); }
+              if (j) ofs << ",";
+              ofs << v;
+            }
+            if (i + 1 < r) ofs << "\n";
+          }
+          return;
+        }
+        // Higher dimensions: write flattened, one value per line
+        const int64_t n = contig.numel();
+        torch::Tensor flat = contig.reshape({n});
+        for (int64_t i = 0; i < n; ++i) {
+          double v = 0.0; try { v = flat[i].item<double>(); } catch (...) { v = flat[i].item<float>(); }
+          ofs << v;
+          if (i + 1 < n) ofs << "\n";
+        }
+      };
+
+      if (fo.lhsIsTensor) {
+        Tensor t = readTensorFromFile(fo.file.text);
+        env_.bind(fo.tensor, t);
+        if (debug_) {
+          std::ostringstream oss; oss << "Loaded tensor from '" << fo.file.text << "' into " << Environment::key(fo.tensor) << " shape=" << t.sizes();
+          debugLog(oss.str());
+        }
+      } else {
+        const auto &src = env_.lookup(fo.tensor);
+        writeTensorToFile(fo.file.text, src);
+        if (debug_) {
+          std::ostringstream oss; oss << "Wrote tensor " << Environment::key(fo.tensor) << " shape=" << src.sizes() << " to '" << fo.file.text << "'";
+          debugLog(oss.str());
+        }
+      }
     } else {
-      // File ops not yet implemented
+      // Unknown statement kind
       if (debug_) debugLog("Skipping non-tensor statement (not yet implemented)");
     }
   }

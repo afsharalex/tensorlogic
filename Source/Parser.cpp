@@ -436,6 +436,12 @@ private:
                 // Reset not possible easily; instead, if no '?', we consider it as LHS already consumed
                 // Build equation from existing LHS
                 expect(Token::Equals, "projection '='");
+                // Support file operation: tensor_ref = file_literal
+                if ((tok_.type == Token::Identifier && tok_.text == "file") || tok_.type == Token::String) {
+                    StringLiteral s = (tok_.type == Token::String) ? parseString() : parseFileLiteral();
+                    FileOperation fo; fo.lhsIsTensor = true; fo.tensor = tr; fo.file = s; fo.loc = s.loc;
+                    return fo;
+                }
                 TensorEquation eq; eq.lhs = tr; eq.projection = "="; eq.rhs = parseExpr(); eq.loc = tr.loc;
                 return eq;
             } catch (const ParseError&) {
@@ -446,6 +452,12 @@ private:
         // Fallback explicit equation parse
         TensorRef lhs = parseTensorRef();
         expect(Token::Equals, "projection '='");
+        // Support file operation: tensor_ref = file_literal (fallback path)
+        if ((tok_.type == Token::Identifier && tok_.text == "file") || tok_.type == Token::String) {
+            StringLiteral s = (tok_.type == Token::String) ? parseString() : parseFileLiteral();
+            FileOperation fo; fo.lhsIsTensor = true; fo.tensor = lhs; fo.file = s; fo.loc = s.loc;
+            return fo;
+        }
         TensorEquation eq; eq.lhs = lhs; eq.projection = "="; eq.rhs = parseExpr(); eq.loc = lhs.loc;
         return eq;
     }
