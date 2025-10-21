@@ -22,7 +22,7 @@
 // - 3 features per example
 // - Each row: feature1, feature2, feature3
 
-X[i, j] = "data/train.csv"
+X[i, j] = "Examples/Programs/data/train.csv"
 
 // After loading, X is a 5x3 matrix:
 // X[0, 0]=1.0, X[0, 1]=2.0, X[0, 2]=1.5
@@ -92,7 +92,7 @@ Y[i] = sigmoid(logits[i])
 // Save the predictions to a text file
 // Each line contains one prediction value
 
-"output/predictions.txt" = Y[i]
+"Examples/Programs/output/predictions.txt" = Y[i]
 
 // The output file will contain:
 // 0.668
