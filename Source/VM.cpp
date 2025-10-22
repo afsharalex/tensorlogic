@@ -42,6 +42,21 @@ const Tensor &Environment::lookup(const TensorRef &ref) const {
 
 std::string Environment::key(const TensorRef &ref) { return ref.name.name; }
 
+int Environment::internLabel(const std::string &label) {
+  auto it = labelToIndex_.find(label);
+  if (it != labelToIndex_.end()) return it->second;
+  int idx = static_cast<int>(labelToIndex_.size());
+  labelToIndex_[label] = idx;
+  return idx;
+}
+
+bool Environment::getLabelIndex(const std::string &label, int &outIdx) const {
+  auto it = labelToIndex_.find(label);
+  if (it == labelToIndex_.end()) return false;
+  outIdx = it->second;
+  return true;
+}
+
 bool Environment::addFact(const std::string &relation, const std::vector<std::string> &tuple) {
   // Serialize tuple with unit separator for unique key
   std::string key;
@@ -671,6 +686,37 @@ static bool gatherNumericIndices(const TensorRef& ref, std::vector<int64_t>& idx
   return true;
 }
 
+// Resolve indices to concrete integer positions using either numeric indices
+// or string labels (Uppercase identifiers). When createLabels=true, unseen
+// labels are assigned new indices. When false, returns false if any label is unknown.
+static bool resolveConcreteIndices(const TensorRef& ref,
+                                   Environment& env,
+                                   std::vector<int64_t>& idxs,
+                                   bool createLabels) {
+  idxs.clear();
+  for (const auto& ix : ref.indices) {
+    if (const auto* num = std::get_if<NumberLiteral>(&ix.value)) {
+      try {
+        long long v = std::stoll(num->text);
+        if (v < 0) return false;
+        idxs.push_back(static_cast<int64_t>(v));
+      } catch (...) { return false; }
+    } else if (const auto* id = std::get_if<Identifier>(&ix.value)) {
+      if (createLabels) {
+        int idx = env.internLabel(id->name);
+        idxs.push_back(static_cast<int64_t>(idx));
+      } else {
+        int idx = 0;
+        if (!env.getLabelIndex(id->name, idx)) return false;
+        idxs.push_back(static_cast<int64_t>(idx));
+      }
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
 void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
   using torch::indexing::Slice;
   using torch::indexing::TensorIndex;
@@ -691,7 +737,7 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
       }
       env_.bind(eq.lhs, t);
       return;
-    } else if (gatherNumericIndices(eq.lhs, idxs)) {
+    } else if (resolveConcreteIndices(eq.lhs, env_, idxs, true)) {
       // Determine required shape (max(index)+1 per dim)
       std::vector<int64_t> reqShape;
       reqShape.reserve(idxs.size());
@@ -1362,9 +1408,9 @@ void TensorLogicVM::execQuery(const Query &q) {
     // Lookup (throws if missing)
     const auto &t = env_.lookup(ref);
 
-    // If specific numeric indices provided, print scalar value
+    // If specific indices provided (numeric or label), print scalar value
     std::vector<int64_t> idxs;
-    if (!ref.indices.empty() && gatherNumericIndices(ref, idxs)) {
+    if (!ref.indices.empty() && resolveConcreteIndices(ref, env_, idxs, false)) {
       std::vector<TensorIndex> elemIdx;
       elemIdx.reserve(idxs.size());
       for (int64_t v : idxs) elemIdx.emplace_back(v);

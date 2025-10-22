@@ -26,6 +26,12 @@ public:
 
   static std::string key(const TensorRef &ref);
 
+  // Label indexing for uppercase constants used as tensor indices
+  // Returns an existing index for label or creates a new one.
+  int internLabel(const std::string &label);
+  // Returns true and sets outIdx if label has an assigned index.
+  bool getLabelIndex(const std::string &label, int &outIdx) const;
+
   // Datalog fact storage helpers (Phase 1 minimal)
   bool addFact(const DatalogFact &f); // returns true if inserted new fact
   bool addFact(const std::string &relation, const std::vector<std::string> &tuple); // returns true if new
@@ -34,6 +40,8 @@ public:
 
 private:
   std::unordered_map<std::string, Tensor> tensors_;
+  // Global mapping from string labels (e.g., Alice) to stable integer indices for tensor axes.
+  std::unordered_map<std::string, int> labelToIndex_;
   // Map relation -> list of tuples (each tuple is a vector of constants as strings)
   std::unordered_map<std::string, std::vector<std::vector<std::string>>> datalog_;
   // For fast deduplication: per-relation set of serialized tuples
