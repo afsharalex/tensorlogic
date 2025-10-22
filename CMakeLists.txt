@@ -45,11 +45,21 @@ set_target_properties(tl PROPERTIES
 
 # Test executable
 add_executable(tl_tests
+    # Existing tests
     Tests/Unit/test_parse_statements.cpp
     Tests/Integration/test_examples.cpp
+    # New unit tests
+    Tests/Unit/test_tensor_operations.cpp
+    Tests/Unit/test_activations.cpp
+    Tests/Unit/test_pooling.cpp
+    Tests/Unit/test_datalog.cpp
+    Tests/Unit/test_neurosymbolic.cpp
+    # Source files needed for tests
     Source/Parser.cpp
     Source/Lexer.cpp
     Source/AST.cpp
+    Source/VM.cpp
+    Source/backend_libtorch.cpp
 )
 
 target_include_directories(tl_tests PRIVATE
