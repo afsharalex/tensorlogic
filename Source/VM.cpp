@@ -449,10 +449,40 @@ static bool tryLowerIndexedProductToEinsum(const TensorRef& lhs,
     return false;
   }
 
-  // Build einsum spec like "ij,jk->ik"
-  const std::string a = labelsFromRef(leftRef->ref);
-  const std::string b = labelsFromRef(rightRef->ref);
-  const std::string out = labelsFromRef(lhs);
+  // Build a stable mapping from full index names to einsum labels (single letters)
+  auto collectNames = [](const TensorRef& r){
+    std::vector<std::string> names; names.reserve(r.indices.size());
+    for (const auto& idx : r.indices) {
+      if (const auto* id = std::get_if<Identifier>(&idx.value)) names.push_back(id->name);
+    }
+    return names;
+  };
+  const std::vector<std::string> leftNames = collectNames(leftRef->ref);
+  const std::vector<std::string> rightNames = collectNames(rightRef->ref);
+  const std::vector<std::string> outNames = collectNames(lhs);
+
+  static const std::string pool = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  std::unordered_map<std::string, char> labelMap;
+  size_t next = 0;
+  auto mapSeq = [&](const std::vector<std::string>& seq){
+    std::string s; s.reserve(seq.size());
+    for (const auto& nm : seq) {
+      auto it = labelMap.find(nm);
+      if (it == labelMap.end()) {
+        if (next >= pool.size()) return std::string();
+        char c = pool[next++];
+        labelMap.emplace(nm, c);
+        s.push_back(c);
+      } else {
+        s.push_back(it->second);
+      }
+    }
+    return s;
+  };
+
+  const std::string a = mapSeq(leftNames);
+  const std::string b = mapSeq(rightNames);
+  const std::string out = mapSeq(outNames);
   if (a.empty() || b.empty()) return false;
   // Allow scalar outputs: empty 'out' means full contraction
   spec_out = a + "," + b + "->" + out;
@@ -955,7 +985,7 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
     const Expr &e = *eq.rhs;
     if (const auto *eref = std::get_if<ExprTensorRef>(&e.node)) {
       if (eq.lhs.indices.empty() && !eref->ref.indices.empty()) {
-        const Tensor &src = env_.lookup(eref->ref);
+        Tensor src = valueForRef(eref->ref, env_);
         Tensor sumAll = torch::sum(src);
         if (debug_) {
           std::ostringstream oss;
