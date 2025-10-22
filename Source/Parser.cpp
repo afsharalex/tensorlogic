@@ -85,6 +85,15 @@ private:
         Index idx; idx.loc = tok_.loc;
         if (tok_.type == Token::Identifier) {
             auto id = parseIdentifier();
+            // Support simple division in index like i/2 used for pooling strides
+            if (tok_.type == Token::Slash) {
+                advance();
+                if (tok_.type != Token::Integer) errorHere("expected integer after '/' in index expression");
+                NumberLiteral div = parseNumber();
+                // Encode as composite identifier text "i/2" for minimal AST change
+                Identifier composed{id.name + "/" + div.text, id.loc};
+                id = std::move(composed);
+            }
             // optional normalization dot suffix: i.
             if (tok_.type == Token::Dot) {
                 advance(); // ignore normalization for now
@@ -435,14 +444,22 @@ private:
                 // Not a query; fallthrough to equation
                 // Reset not possible easily; instead, if no '?', we consider it as LHS already consumed
                 // Build equation from existing LHS
-                expect(Token::Equals, "projection '='");
+                // Parse projection operator: '=', '+=', 'avg=', 'max=', 'min='
+                std::string proj = "=";
+                if (tok_.type == Token::Plus) {
+                    advance(); expect(Token::Equals, "="); proj = "+=";
+                } else if (tok_.type == Token::Identifier && (tok_.text == "avg" || tok_.text == "max" || tok_.text == "min")) {
+                    std::string op = tok_.text; advance(); expect(Token::Equals, "="); proj = op + "=";
+                } else {
+                    expect(Token::Equals, "projection '='");
+                }
                 // Support file operation: tensor_ref = file_literal
                 if ((tok_.type == Token::Identifier && tok_.text == "file") || tok_.type == Token::String) {
                     StringLiteral s = (tok_.type == Token::String) ? parseString() : parseFileLiteral();
                     FileOperation fo; fo.lhsIsTensor = true; fo.tensor = tr; fo.file = s; fo.loc = s.loc;
                     return fo;
                 }
-                TensorEquation eq; eq.lhs = tr; eq.projection = "="; eq.rhs = parseExpr(); eq.loc = tr.loc;
+                TensorEquation eq; eq.lhs = tr; eq.projection = proj; eq.rhs = parseExpr(); eq.loc = tr.loc;
                 return eq;
             } catch (const ParseError&) {
                 // If failed, restore token best-effort (no backtracking of token stream provided)
@@ -451,14 +468,22 @@ private:
         }
         // Fallback explicit equation parse
         TensorRef lhs = parseTensorRef();
-        expect(Token::Equals, "projection '='");
+        // Parse projection operator: '=', '+=', 'avg=', 'max=', 'min='
+        std::string proj = "=";
+        if (tok_.type == Token::Plus) {
+            advance(); expect(Token::Equals, "="); proj = "+=";
+        } else if (tok_.type == Token::Identifier && (tok_.text == "avg" || tok_.text == "max" || tok_.text == "min")) {
+            std::string op = tok_.text; advance(); expect(Token::Equals, "="); proj = op + "=";
+        } else {
+            expect(Token::Equals, "projection '='");
+        }
         // Support file operation: tensor_ref = file_literal (fallback path)
         if ((tok_.type == Token::Identifier && tok_.text == "file") || tok_.type == Token::String) {
             StringLiteral s = (tok_.type == Token::String) ? parseString() : parseFileLiteral();
             FileOperation fo; fo.lhsIsTensor = true; fo.tensor = lhs; fo.file = s; fo.loc = s.loc;
             return fo;
         }
-        TensorEquation eq; eq.lhs = lhs; eq.projection = "="; eq.rhs = parseExpr(); eq.loc = lhs.loc;
+        TensorEquation eq; eq.lhs = lhs; eq.projection = proj; eq.rhs = parseExpr(); eq.loc = lhs.loc;
         return eq;
     }
 
