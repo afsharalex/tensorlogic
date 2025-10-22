@@ -50,6 +50,7 @@ namespace tl::lex {
     struct minus  : pegtl::one<'-'> {};
     struct dot    : pegtl::one<'.'> {};
     struct slash  : pegtl::one<'/'> {};
+    struct star   : pegtl::one<'*'> {};
     struct larrow : pegtl::string<'<','-'> {};
 
     // Comparison operators
@@ -71,7 +72,7 @@ namespace tl::lex {
                 number,
                 identifier,
                 larrow, ge, le, eqeq, noteq, gt, lt,
-                lbrack, rbrack, lparen, rparen, comma, equals, qmark, plus, minus, dot, slash,
+                lbrack, rbrack, lparen, rparen, comma, equals, qmark, plus, minus, dot, slash, star,
                 unknown_char
             > {};
 
@@ -166,6 +167,7 @@ namespace tl::lex {
     DEFINE_CHAR_TOKEN(minus,  Token::Minus,  '-')
     DEFINE_CHAR_TOKEN(dot,    Token::Dot,    '.')
     DEFINE_CHAR_TOKEN(slash,  Token::Slash,  '/')
+    DEFINE_CHAR_TOKEN(star,   Token::Star,   '*')
 
     // multi-char '<-'
     template<> struct action< larrow > {

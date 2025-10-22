@@ -32,6 +32,7 @@ private:
     Token tok_;
 
     void advance() { tok_ = toks_.consume(); }
+    void skipNewlines() { while (tok_.type == Token::Newline) advance(); }
 
     static bool startsWithUpper(const std::string& s) {
         if (s.empty()) return false;
@@ -84,6 +85,15 @@ private:
         Index idx; idx.loc = tok_.loc;
         if (tok_.type == Token::Identifier) {
             auto id = parseIdentifier();
+            // Support simple division in index like i/2 used for pooling strides
+            if (tok_.type == Token::Slash) {
+                advance();
+                if (tok_.type != Token::Integer) errorHere("expected integer after '/' in index expression");
+                NumberLiteral div = parseNumber();
+                // Encode as composite identifier text "i/2" for minimal AST change
+                Identifier composed{id.name + "/" + div.text, id.loc};
+                id = std::move(composed);
+            }
             // optional normalization dot suffix: i.
             if (tok_.type == Token::Dot) {
                 advance(); // ignore normalization for now
@@ -120,28 +130,61 @@ private:
 
     // Expressions: term ((+|-) term)*, where term is product of primaries by implicit multiplication
     ExprPtr parseExpr() {
+        skipNewlines();
         auto lhs = parseTerm();
-        while (tok_.type == Token::Plus || tok_.type == Token::Minus) {
-            Token::Type op = tok_.type; advance();
-            auto rhs = parseTerm();
-            auto e = std::make_shared<Expr>();
-            e->loc = lhs->loc;
-            ExprBinary bin;
-            bin.op = (op == Token::Plus) ? ExprBinary::Op::Add : ExprBinary::Op::Sub;
-            bin.lhs = lhs; bin.rhs = rhs;
-            e->node = std::move(bin);
-            lhs = e;
+        while (true) {
+            skipNewlines();
+            if (tok_.type == Token::Plus || tok_.type == Token::Minus) {
+                Token::Type op = tok_.type; advance();
+                skipNewlines();
+                auto rhs = parseTerm();
+                auto e = std::make_shared<Expr>();
+                e->loc = lhs->loc;
+                ExprBinary bin;
+                bin.op = (op == Token::Plus) ? ExprBinary::Op::Add : ExprBinary::Op::Sub;
+                bin.lhs = lhs; bin.rhs = rhs;
+                e->node = std::move(bin);
+                lhs = e;
+                continue;
+            }
+            break;
         }
         return lhs;
     }
 
-    // Parse a primary: number | tensor_ref | '(' expr ')'
+    // Parse a primary: number | tensor_ref | '(' expr ')' | list literal [...] | unary '-' primary
     ExprPtr parsePrimary() {
+        // unary minus
+        if (tok_.type == Token::Minus) {
+            SourceLocation loc = tok_.loc;
+            advance();
+            auto rhs = parsePrimary();
+            // build 0 - rhs
+            NumberLiteral zero{"0", loc};
+            auto zeroExpr = std::make_shared<Expr>(); zeroExpr->loc = loc; zeroExpr->node = ExprNumber{zero};
+            auto e = std::make_shared<Expr>(); e->loc = loc; ExprBinary bin; bin.op = ExprBinary::Op::Sub; bin.lhs = zeroExpr; bin.rhs = rhs; e->node = std::move(bin);
+            return e;
+        }
         if (tok_.type == Token::LParen) {
             advance();
             auto inner = parseExpr();
             expect(Token::RParen, ")");
             auto e = std::make_shared<Expr>(); e->loc = inner->loc; e->node = ExprParen{inner};
+            return e;
+        }
+        if (tok_.type == Token::LBracket) {
+            // Nested list literal: elements are expressions or sublists
+            SourceLocation loc = tok_.loc;
+            advance(); // consume '['
+            std::vector<ExprPtr> elems;
+            if (tok_.type != Token::RBracket) {
+                elems.push_back(parseExpr());
+                while (accept(Token::Comma)) {
+                    elems.push_back(parseExpr());
+                }
+            }
+            expect(Token::RBracket, "]");
+            auto e = std::make_shared<Expr>(); e->loc = loc; e->node = ExprList{std::move(elems)};
             return e;
         }
         if (tok_.type == Token::Integer || tok_.type == Token::Float) {
@@ -205,6 +248,16 @@ private:
                 auto e = std::make_shared<Expr>();
                 e->loc = lhs->loc;
                 ExprBinary bin; bin.op = ExprBinary::Op::Div; bin.lhs = lhs; bin.rhs = rhs;
+                e->node = std::move(bin);
+                lhs = e;
+                continue;
+            }
+            if (tok_.type == Token::Star) {
+                advance();
+                auto rhs = parsePrimary();
+                auto e = std::make_shared<Expr>();
+                e->loc = lhs->loc;
+                ExprBinary bin; bin.op = ExprBinary::Op::Mul; bin.lhs = lhs; bin.rhs = rhs;
                 e->node = std::move(bin);
                 lhs = e;
                 continue;
@@ -292,6 +345,8 @@ private:
     }
 
     std::variant<DatalogAtom, DatalogCondition> parseRuleBodyElement() {
+        // Allow body elements to span lines
+        skipNewlines();
         // Decide based on lookahead: Uppercase Identifier followed by '(' means atom
         if (tok_.type == Token::Identifier && startsWithUpper(tok_.text) && toks_.peek().type == Token::LParen) {
             return parseAtom();
@@ -329,7 +384,7 @@ private:
         // Possible Datalog atom/rule/fact at statement start
         if (tok_.type == Token::Identifier && tok_.text != "file" && toks_.peek().type == Token::LParen && startsWithUpper(tok_.text)) {
             DatalogAtom head = parseAtom();
-            // Datalog query: Atom?
+            // Datalog query: Atom? or Atom, body...? (conjunctive query with comparisons)
             if (accept(Token::Question)) {
                 Query q; q.target = head; q.loc = head.loc; return q;
             }
@@ -340,6 +395,18 @@ private:
                 while (accept(Token::Comma)) body.push_back(parseRuleBodyElement());
                 DatalogRule r; r.head = std::move(head); r.body = std::move(body); r.loc = r.head.loc;
                 return r;
+            }
+            // Datalog conjunctive query: Atom, (Atom|Condition) ... ?
+            if (tok_.type == Token::Comma) {
+                std::vector<std::variant<DatalogAtom, DatalogCondition>> conj;
+                // include the first atom
+                conj.push_back(head);
+                do {
+                    advance(); // consume ','
+                    conj.push_back(parseRuleBodyElement());
+                } while (tok_.type == Token::Comma);
+                expect(Token::Question, "'?' to end query");
+                Query q; q.target = head; q.body = std::move(conj); q.loc = head.loc; return q;
             }
             // else, treat as fact if constants only
             if (allConstants(head)) {
@@ -377,8 +444,22 @@ private:
                 // Not a query; fallthrough to equation
                 // Reset not possible easily; instead, if no '?', we consider it as LHS already consumed
                 // Build equation from existing LHS
-                expect(Token::Equals, "projection '='");
-                TensorEquation eq; eq.lhs = tr; eq.projection = "="; eq.rhs = parseExpr(); eq.loc = tr.loc;
+                // Parse projection operator: '=', '+=', 'avg=', 'max=', 'min='
+                std::string proj = "=";
+                if (tok_.type == Token::Plus) {
+                    advance(); expect(Token::Equals, "="); proj = "+=";
+                } else if (tok_.type == Token::Identifier && (tok_.text == "avg" || tok_.text == "max" || tok_.text == "min")) {
+                    std::string op = tok_.text; advance(); expect(Token::Equals, "="); proj = op + "=";
+                } else {
+                    expect(Token::Equals, "projection '='");
+                }
+                // Support file operation: tensor_ref = file_literal
+                if ((tok_.type == Token::Identifier && tok_.text == "file") || tok_.type == Token::String) {
+                    StringLiteral s = (tok_.type == Token::String) ? parseString() : parseFileLiteral();
+                    FileOperation fo; fo.lhsIsTensor = true; fo.tensor = tr; fo.file = s; fo.loc = s.loc;
+                    return fo;
+                }
+                TensorEquation eq; eq.lhs = tr; eq.projection = proj; eq.rhs = parseExpr(); eq.loc = tr.loc;
                 return eq;
             } catch (const ParseError&) {
                 // If failed, restore token best-effort (no backtracking of token stream provided)
@@ -387,8 +468,22 @@ private:
         }
         // Fallback explicit equation parse
         TensorRef lhs = parseTensorRef();
-        expect(Token::Equals, "projection '='");
-        TensorEquation eq; eq.lhs = lhs; eq.projection = "="; eq.rhs = parseExpr(); eq.loc = lhs.loc;
+        // Parse projection operator: '=', '+=', 'avg=', 'max=', 'min='
+        std::string proj = "=";
+        if (tok_.type == Token::Plus) {
+            advance(); expect(Token::Equals, "="); proj = "+=";
+        } else if (tok_.type == Token::Identifier && (tok_.text == "avg" || tok_.text == "max" || tok_.text == "min")) {
+            std::string op = tok_.text; advance(); expect(Token::Equals, "="); proj = op + "=";
+        } else {
+            expect(Token::Equals, "projection '='");
+        }
+        // Support file operation: tensor_ref = file_literal (fallback path)
+        if ((tok_.type == Token::Identifier && tok_.text == "file") || tok_.type == Token::String) {
+            StringLiteral s = (tok_.type == Token::String) ? parseString() : parseFileLiteral();
+            FileOperation fo; fo.lhsIsTensor = true; fo.tensor = lhs; fo.file = s; fo.loc = s.loc;
+            return fo;
+        }
+        TensorEquation eq; eq.lhs = lhs; eq.projection = proj; eq.rhs = parseExpr(); eq.loc = lhs.loc;
         return eq;
     }
 

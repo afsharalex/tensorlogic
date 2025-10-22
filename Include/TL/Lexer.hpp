@@ -12,7 +12,7 @@ namespace tl::lex {
             Identifier, Integer, Float, String,
             LBracket, RBracket, LParen, RParen,
             Comma, Equals, Question,
-            Plus, Minus, Dot, Slash,
+            Plus, Minus, Dot, Slash, Star,
             Greater, Less, Ge, Le, EqEq, NotEq,
             LArrow, // '<-' for Datalog rules
             End, Newline, Unknown

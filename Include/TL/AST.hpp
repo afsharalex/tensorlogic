@@ -45,6 +45,8 @@ using ExprPtr = std::shared_ptr<Expr>;
 struct ExprTensorRef { TensorRef ref; };
 struct ExprNumber { NumberLiteral literal; };
 struct ExprString { StringLiteral literal; };
+// List literal: elements may be numbers or nested lists (n-dimensional)
+struct ExprList { std::vector<ExprPtr> elements; };
 struct ExprParen { ExprPtr inner; };
 struct ExprCall { Identifier func; std::vector<ExprPtr> args; };
 struct ExprBinary {
@@ -56,7 +58,7 @@ struct ExprBinary {
 
 struct Expr {
     SourceLocation loc{};
-    std::variant<ExprTensorRef, ExprNumber, ExprString, ExprParen, ExprCall, ExprBinary> node;
+    std::variant<ExprTensorRef, ExprNumber, ExprString, ExprList, ExprParen, ExprCall, ExprBinary> node;
 };
 
 // Datalog structures
@@ -84,9 +86,15 @@ struct FileOperation {
     SourceLocation loc{};
 };
 
+// Forward declaration to allow Query to reference DatalogCondition
+struct DatalogCondition;
+
 struct Query {
     // Support queries over tensor refs and Datalog atoms
+    // Additionally, for Datalog queries, we may allow a conjunction of atoms and comparisons.
     std::variant<TensorRef, DatalogAtom> target;
+    // If non-empty, represents a conjunctive query of atoms/conditions; the first element is usually the same as `target` when `target` holds a DatalogAtom.
+    std::vector<std::variant<DatalogAtom, DatalogCondition>> body;
     SourceLocation loc{};
 };
 

@@ -25,6 +25,8 @@ add_executable(tl
     Source/Parser.cpp
     Source/Lexer.cpp
     Source/AST.cpp
+    Source/backend_libtorch.cpp
+    Source/VM.cpp
 )
 
 target_include_directories(tl PRIVATE
