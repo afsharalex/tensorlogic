@@ -102,7 +102,8 @@ BackendType BackendRouter::analyze(const Statement &st) {
 
 // -------- TensorLogicVM --------
 
-TensorLogicVM::TensorLogicVM() {
+TensorLogicVM::TensorLogicVM(std::ostream* out, std::ostream* err)
+  : output_stream_(out), error_stream_(err) {
   torch_ = BackendFactory::create(BackendType::LibTorch);
   if (const char* env = std::getenv("TL_DEBUG")) {
     std::string v = env;
@@ -117,7 +118,7 @@ void TensorLogicVM::setDebug(bool enabled) { debug_ = enabled; }
 bool TensorLogicVM::debug() const { return debug_; }
 void TensorLogicVM::debugLog(const std::string &msg) const {
   if (debug_) {
-    std::cout << "[VM] " << msg << std::endl;
+    (*error_stream_) << "[VM] " << msg << std::endl;
   }
 }
 
@@ -1417,9 +1418,9 @@ void TensorLogicVM::execQuery(const Query &q) {
       torch::Tensor elem = t.index(elemIdx);
       double val = 0.0;
       try { val = elem.item<double>(); } catch (...) { val = elem.item<float>(); }
-      std::cout << name << "[";
-      for (size_t i = 0; i < idxs.size(); ++i) { if (i) std::cout << ","; std::cout << idxs[i]; }
-      std::cout << "] = " << val << std::endl;
+      (*output_stream_) << name << "[";
+      for (size_t i = 0; i < idxs.size(); ++i) { if (i) (*output_stream_) << ","; (*output_stream_) << idxs[i]; }
+      (*output_stream_) << "] = " << val << std::endl;
       if (debug_) {
         std::ostringstream oss;
         oss << "Query tensor present: shape=" << t.sizes();
@@ -1429,7 +1430,7 @@ void TensorLogicVM::execQuery(const Query &q) {
     }
 
     // Otherwise, print entire tensor
-    std::cout << name << " =\n" << t << std::endl;
+    (*output_stream_) << name << " =\n" << t << std::endl;
     if (debug_) {
       std::ostringstream oss;
       oss << "Query tensor present: shape=" << t.sizes();
@@ -1449,7 +1450,7 @@ void TensorLogicVM::execQuery(const Query &q) {
         else if (const auto *c = std::get_if<DatalogCondition>(&el)) conditions.push_back(*c);
       }
       if (atoms.empty()) {
-        std::cout << "None" << std::endl;
+        (*output_stream_) << "None" << std::endl;
         return;
       }
 
@@ -1478,19 +1479,19 @@ void TensorLogicVM::execQuery(const Query &q) {
             if (!evalCondition(cond, binding)) return;
           }
           if (varNames.empty()) {
-            std::cout << "True" << std::endl;
+            (*output_stream_) << "True" << std::endl;
             anyPrinted = true;
             return;
           }
           if (varNames.size() == 1) {
-            std::cout << binding[varNames[0]] << std::endl;
+            (*output_stream_) << binding[varNames[0]] << std::endl;
             anyPrinted = true;
           } else {
             for (size_t i = 0; i < varNames.size(); ++i) {
-              if (i) std::cout << ", ";
-              std::cout << binding[varNames[i]];
+              if (i) (*output_stream_) << ", ";
+              (*output_stream_) << binding[varNames[i]];
             }
-            std::cout << std::endl;
+            (*output_stream_) << std::endl;
             anyPrinted = true;
           }
           return;
@@ -1522,9 +1523,9 @@ void TensorLogicVM::execQuery(const Query &q) {
       if (!anyPrinted) {
         // Ground conjunctive query with no satisfying assignment
         if (varNames.empty()) {
-          std::cout << "False" << std::endl;
+          (*output_stream_) << "False" << std::endl;
         } else {
-          std::cout << "None" << std::endl;
+          (*output_stream_) << "None" << std::endl;
         }
       }
       return;
@@ -1586,7 +1587,7 @@ void TensorLogicVM::execQuery(const Query &q) {
     if (varNames.empty()) {
       bool any = false;
       for (const auto &tup : tuples) { if (matchesTuple(tup)) { any = true; break; } }
-      std::cout << (any ? "True" : "False") << std::endl;
+      (*output_stream_) << (any ? "True" : "False") << std::endl;
       return;
     }
 
@@ -1595,20 +1596,20 @@ void TensorLogicVM::execQuery(const Query &q) {
     for (const auto &tup : tuples) {
       if (!matchesTuple(tup)) continue;
       if (varNames.size() == 1) {
-        std::cout << tup[varPositions[0]] << std::endl;
+        (*output_stream_) << tup[varPositions[0]] << std::endl;
         anyPrinted = true;
       } else {
         // Print comma-separated values for the variables in first-appearance order
         for (size_t i = 0; i < varNames.size(); ++i) {
-          if (i) std::cout << ", ";
-          std::cout << tup[varPositions[i]];
+          if (i) (*output_stream_) << ", ";
+          (*output_stream_) << tup[varPositions[i]];
         }
-        std::cout << std::endl;
+        (*output_stream_) << std::endl;
         anyPrinted = true;
       }
     }
     if (!anyPrinted) {
-      std::cout << "None" << std::endl;
+      (*output_stream_) << "None" << std::endl;
     }
   }
 }

@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <iostream>
 
 namespace tl {
 
@@ -57,7 +58,7 @@ public:
 // Interpreted VM (Phase 1): walk statements and execute eagerly.
 class TensorLogicVM {
 public:
-  TensorLogicVM();
+  TensorLogicVM(std::ostream* out = &std::cout, std::ostream* err = &std::cerr);
 
   // Enable/disable debug logging
   void setDebug(bool enabled);
@@ -81,6 +82,10 @@ private:
   size_t applyRule(const DatalogRule &rule);
 
   void debugLog(const std::string &msg) const;
+
+  // Output streams for normal output and errors/debug
+  std::ostream* output_stream_ { &std::cout };
+  std::ostream* error_stream_ { &std::cerr };
 
   std::unique_ptr<TensorBackend> torch_;
   BackendRouter router_;
