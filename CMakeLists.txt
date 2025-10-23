@@ -63,6 +63,7 @@ add_executable(tl_tests
     Tests/Unit/test_pooling.cpp
     Tests/Unit/test_datalog.cpp
     Tests/Unit/test_neurosymbolic.cpp
+    Tests/Unit/test_executors.cpp
     # Source files needed for tests
     Source/Parser.cpp
     Source/Lexer.cpp

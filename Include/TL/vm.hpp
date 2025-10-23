@@ -74,9 +74,6 @@ public:
   Environment &env() { return env_; }
   const Environment &env() const { return env_; }
 
-  // Legacy method for fallback executor
-  Tensor execTensorEquationLegacy(const TensorEquation &eq);
-
 private:
   void execTensorEquation(const TensorEquation &eq);
   void execQuery(const Query &q);
