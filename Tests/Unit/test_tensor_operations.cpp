@@ -24,7 +24,7 @@ static float getTensorValue(const torch::Tensor& t, const std::vector<int64_t>& 
 
 TEST_CASE("Basic scalar assignment", "[tensor][scalar]") {
     std::stringstream out, err;
-    TensorLogicVM vm(&out, &err);
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram("x = 42");
     vm.execute(prog);
 
@@ -34,7 +34,7 @@ TEST_CASE("Basic scalar assignment", "[tensor][scalar]") {
 
 TEST_CASE("Element-wise tensor assignment", "[tensor][element]") {
     std::stringstream out, err;
-    TensorLogicVM vm(&out, &err);
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         W[0, 0] = 1.0
         W[0, 1] = 2.0
@@ -52,7 +52,7 @@ TEST_CASE("Element-wise tensor assignment", "[tensor][element]") {
 
 TEST_CASE("List literal 1D initialization", "[tensor][list]") {
     std::stringstream out, err;
-    TensorLogicVM vm(&out, &err);
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram("V = [1, 2, 3, 4]");
     vm.execute(prog);
 
@@ -67,7 +67,7 @@ TEST_CASE("List literal 1D initialization", "[tensor][list]") {
 
 TEST_CASE("List literal 2D initialization", "[tensor][list]") {
     std::stringstream out, err;
-    TensorLogicVM vm(&out, &err);
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram("M = [[1, 2], [3, 4]]");
     vm.execute(prog);
 
@@ -83,7 +83,7 @@ TEST_CASE("List literal 2D initialization", "[tensor][list]") {
 
 TEST_CASE("Vector dot product (einsum)", "[tensor][einsum]") {
     std::stringstream out, err;
-    TensorLogicVM vm(&out, &err);
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         A = [1, 2, 3]
         B = [4, 5, 6]
@@ -98,7 +98,7 @@ TEST_CASE("Vector dot product (einsum)", "[tensor][einsum]") {
 
 TEST_CASE("Matrix-vector multiply", "[tensor][einsum]") {
     std::stringstream out, err;
-    TensorLogicVM vm(&out, &err);
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         W = [[1, 2], [3, 4]]
         X = [10, 20]
@@ -115,7 +115,7 @@ TEST_CASE("Matrix-vector multiply", "[tensor][einsum]") {
 
 TEST_CASE("Matrix-matrix multiply", "[tensor][einsum]") {
     std::stringstream out, err;
-    TensorLogicVM vm(&out, &err);
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         A = [[1, 2], [3, 4]]
         B = [[5, 6], [7, 8]]
@@ -136,7 +136,7 @@ TEST_CASE("Matrix-matrix multiply", "[tensor][einsum]") {
 
 TEST_CASE("Sum reduction", "[tensor][reduction]") {
     std::stringstream out, err;
-    TensorLogicVM vm(&out, &err);
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         V = [1, 2, 3, 4]
         total = V[i]
@@ -150,7 +150,7 @@ TEST_CASE("Sum reduction", "[tensor][reduction]") {
 
 TEST_CASE("Arithmetic addition", "[tensor][arithmetic]") {
     std::stringstream out, err;
-    TensorLogicVM vm(&out, &err);
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         A = [1, 2, 3]
         B = [4, 5, 6]
@@ -166,7 +166,7 @@ TEST_CASE("Arithmetic addition", "[tensor][arithmetic]") {
 
 TEST_CASE("Arithmetic subtraction", "[tensor][arithmetic]") {
     std::stringstream out, err;
-    TensorLogicVM vm(&out, &err);
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         A = [10, 20, 30]
         B = [1, 2, 3]
@@ -182,7 +182,7 @@ TEST_CASE("Arithmetic subtraction", "[tensor][arithmetic]") {
 
 TEST_CASE("Scalar-vector multiplication", "[tensor][arithmetic]") {
     std::stringstream out, err;
-    TensorLogicVM vm(&out, &err);
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         scale = 2.0
         V = [1, 2, 3]
@@ -198,7 +198,7 @@ TEST_CASE("Scalar-vector multiplication", "[tensor][arithmetic]") {
 
 TEST_CASE("Identity assignment", "[tensor][identity]") {
     std::stringstream out, err;
-    TensorLogicVM vm(&out, &err);
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         X = [[1, 2], [3, 4]]
         Y = X
@@ -215,7 +215,7 @@ TEST_CASE("Identity assignment", "[tensor][identity]") {
 
 TEST_CASE("Label-based indexing", "[tensor][labels]") {
     std::stringstream out, err;
-    TensorLogicVM vm(&out, &err);
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         W[Alice] = 1.0
         W[Bob] = 2.0

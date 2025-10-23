@@ -27,7 +27,7 @@ static bool hasFact(const Environment& env, const std::string& relation,
 
 TEST_CASE("Simple Datalog fact", "[datalog][facts]") {
     std::stringstream out, err;
-    TensorLogicVM vm(&out, &err);
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram("Parent(Alice, Bob)");
     vm.execute(prog);
 
@@ -35,7 +35,8 @@ TEST_CASE("Simple Datalog fact", "[datalog][facts]") {
 }
 
 TEST_CASE("Multiple Datalog facts", "[datalog][facts]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         Parent(Alice, Bob)
         Parent(Bob, Charlie)
@@ -49,7 +50,8 @@ TEST_CASE("Multiple Datalog facts", "[datalog][facts]") {
 }
 
 TEST_CASE("Datalog rule - identity", "[datalog][rules]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         Parent(Alice, Bob)
         Parent(Bob, Charlie)
@@ -66,7 +68,8 @@ TEST_CASE("Datalog rule - identity", "[datalog][rules]") {
 }
 
 TEST_CASE("Datalog rule - transitive closure", "[datalog][rules][transitive]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         Parent(Alice, Bob)
         Parent(Bob, Charlie)
@@ -91,7 +94,8 @@ TEST_CASE("Datalog rule - transitive closure", "[datalog][rules][transitive]") {
 }
 
 TEST_CASE("Datalog rule - sibling", "[datalog][rules]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         Parent(Alice, Bob)
         Parent(Alice, Charlie)
@@ -114,7 +118,8 @@ TEST_CASE("Datalog rule - sibling", "[datalog][rules]") {
 }
 
 TEST_CASE("Datalog rule with comparison", "[datalog][rules][comparison]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         Value[Alice] = 10
         Value[Bob] = 20
@@ -130,7 +135,8 @@ TEST_CASE("Datalog rule with comparison", "[datalog][rules][comparison]") {
 }
 
 TEST_CASE("Datalog query - simple", "[datalog][query]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         Parent(Alice, Bob)
         Parent(Bob, Charlie)
@@ -143,7 +149,8 @@ TEST_CASE("Datalog query - simple", "[datalog][query]") {
 }
 
 TEST_CASE("Datalog query - conjunctive", "[datalog][query]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         Parent(Alice, Bob)
         Parent(Bob, Charlie)
@@ -160,7 +167,8 @@ TEST_CASE("Datalog query - conjunctive", "[datalog][query]") {
 }
 
 TEST_CASE("Datalog - social network", "[datalog][rules][complex]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         Friend(Alice, Bob)
         Friend(Bob, Charlie)
@@ -185,7 +193,8 @@ TEST_CASE("Datalog - social network", "[datalog][rules][complex]") {
 }
 
 TEST_CASE("Datalog - path finding", "[datalog][rules][graph]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         Edge(A, B)
         Edge(B, C)
@@ -210,7 +219,8 @@ TEST_CASE("Datalog - path finding", "[datalog][rules][graph]") {
 }
 
 TEST_CASE("Datalog - multiple relations", "[datalog][facts][multiple]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         Person(Alice)
         Person(Bob)
@@ -233,7 +243,8 @@ TEST_CASE("Datalog - multiple relations", "[datalog][facts][multiple]") {
 }
 
 TEST_CASE("Datalog - grandparent rule", "[datalog][rules]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         Parent(Alice, Bob)
         Parent(Bob, Charlie)
