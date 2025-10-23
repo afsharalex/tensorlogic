@@ -33,7 +33,8 @@ static bool hasFact(const Environment& env, const std::string& relation,
 }
 
 TEST_CASE("Neurosymbolic - entity embeddings with similarity", "[neurosymbolic]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         // Entity embeddings
         Emb[Alice, 0] = 0.8
@@ -59,7 +60,8 @@ TEST_CASE("Neurosymbolic - entity embeddings with similarity", "[neurosymbolic]"
 }
 
 TEST_CASE("Neurosymbolic - mixed reasoning", "[neurosymbolic][mixed]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         // Neural component: embeddings
         Emb[Alice, 0] = 0.9
@@ -99,7 +101,8 @@ TEST_CASE("Neurosymbolic - mixed reasoning", "[neurosymbolic][mixed]") {
 }
 
 TEST_CASE("Neurosymbolic - knowledge graph completion", "[neurosymbolic][kg]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         // Embeddings for cities
         Emb[Paris, 0] = 0.9
@@ -158,7 +161,8 @@ TEST_CASE("Neurosymbolic - knowledge graph completion", "[neurosymbolic][kg]") {
 }
 
 TEST_CASE("Neurosymbolic - relation prediction with embeddings", "[neurosymbolic][relations]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         // Simple entity embeddings (2D)
         Emb[Alice, 0] = 0.8
@@ -196,7 +200,8 @@ TEST_CASE("Neurosymbolic - relation prediction with embeddings", "[neurosymbolic
 }
 
 TEST_CASE("Neurosymbolic - boolean tensors", "[neurosymbolic][boolean]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         // Adjacency matrix (boolean tensor)
         Adjacent[0, 1] = 1
@@ -223,7 +228,8 @@ TEST_CASE("Neurosymbolic - boolean tensors", "[neurosymbolic][boolean]") {
 }
 
 TEST_CASE("Neurosymbolic - confidence scoring", "[neurosymbolic][scoring]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         // Entity embeddings
         Emb[Alice, 0] = 0.9

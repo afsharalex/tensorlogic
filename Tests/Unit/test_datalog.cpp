@@ -2,6 +2,7 @@
 #include "TL/Parser.hpp"
 #include "TL/vm.hpp"
 #include <string>
+#include <sstream>
 
 using namespace tl;
 
@@ -25,7 +26,8 @@ static bool hasFact(const Environment& env, const std::string& relation,
 }
 
 TEST_CASE("Simple Datalog fact", "[datalog][facts]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm(&out, &err);
     auto prog = parseProgram("Parent(Alice, Bob)");
     vm.execute(prog);
 

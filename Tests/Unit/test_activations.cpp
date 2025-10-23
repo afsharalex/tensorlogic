@@ -3,6 +3,7 @@
 #include "TL/Parser.hpp"
 #include "TL/vm.hpp"
 #include <cmath>
+#include <sstream>
 
 using namespace tl;
 using Catch::Matchers::WithinAbs;
@@ -20,7 +21,8 @@ static float getTensorValue(const torch::Tensor& t, const std::vector<int64_t>& 
 }
 
 TEST_CASE("ReLU activation", "[activation][relu]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm(&out, &err);
     auto prog = parseProgram(R"(
         X = [-2, -1, 0, 1, 2]
         Y[i] = relu(X[i])
@@ -36,7 +38,8 @@ TEST_CASE("ReLU activation", "[activation][relu]") {
 }
 
 TEST_CASE("Sigmoid activation", "[activation][sigmoid]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm(&out, &err);
     auto prog = parseProgram(R"(
         X = [0, 1, -1]
         Y[i] = sigmoid(X[i])
@@ -53,7 +56,8 @@ TEST_CASE("Sigmoid activation", "[activation][sigmoid]") {
 }
 
 TEST_CASE("Tanh activation", "[activation][tanh]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm(&out, &err);
     auto prog = parseProgram(R"(
         X = [0, 1, -1]
         Y[i] = tanh(X[i])
@@ -70,7 +74,8 @@ TEST_CASE("Tanh activation", "[activation][tanh]") {
 }
 
 TEST_CASE("Step (Heaviside) function", "[activation][step]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm(&out, &err);
     auto prog = parseProgram(R"(
         X = [-2, -0.5, 0, 0.5, 2]
         Y[i] = step(X[i])
@@ -86,7 +91,8 @@ TEST_CASE("Step (Heaviside) function", "[activation][step]") {
 }
 
 TEST_CASE("Exponential function", "[activation][exp]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm(&out, &err);
     auto prog = parseProgram(R"(
         X = [0, 1, 2]
         Y[i] = exp(X[i])
@@ -103,7 +109,8 @@ TEST_CASE("Exponential function", "[activation][exp]") {
 }
 
 TEST_CASE("Square root function", "[activation][sqrt]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm(&out, &err);
     auto prog = parseProgram(R"(
         X = [0, 1, 4, 9, 16]
         Y[i] = sqrt(X[i])
@@ -119,7 +126,8 @@ TEST_CASE("Square root function", "[activation][sqrt]") {
 }
 
 TEST_CASE("Absolute value function", "[activation][abs]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm(&out, &err);
     auto prog = parseProgram(R"(
         X = [-2, -1, 0, 1, 2]
         Y[i] = abs(X[i])
@@ -135,7 +143,8 @@ TEST_CASE("Absolute value function", "[activation][abs]") {
 }
 
 TEST_CASE("Single layer perceptron with sigmoid", "[activation][perceptron]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm(&out, &err);
     auto prog = parseProgram(R"(
         // Inputs
         X = [1, 0]
@@ -161,7 +170,8 @@ TEST_CASE("Single layer perceptron with sigmoid", "[activation][perceptron]") {
 }
 
 TEST_CASE("Multi-layer perceptron", "[activation][mlp]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm(&out, &err);
     auto prog = parseProgram(R"(
         // Input
         X = [1, 2]

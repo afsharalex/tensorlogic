@@ -15,7 +15,8 @@ static float getTensorValue(const torch::Tensor& t, const std::vector<int64_t>& 
 }
 
 TEST_CASE("1D max pooling with stride 2", "[pooling][max]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         X = [1, 5, 3, 7, 2, 8, 4, 6]
         Y[i/2] max= X[i]
@@ -34,7 +35,8 @@ TEST_CASE("1D max pooling with stride 2", "[pooling][max]") {
 }
 
 TEST_CASE("1D average pooling with stride 2", "[pooling][avg]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         X = [1, 5, 3, 7, 2, 8, 4, 6]
         Y[i/2] avg= X[i]
@@ -53,7 +55,8 @@ TEST_CASE("1D average pooling with stride 2", "[pooling][avg]") {
 }
 
 TEST_CASE("1D min pooling with stride 2", "[pooling][min]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         X = [1, 5, 3, 7, 2, 8, 4, 6]
         Y[i/2] min= X[i]
@@ -72,7 +75,8 @@ TEST_CASE("1D min pooling with stride 2", "[pooling][min]") {
 }
 
 TEST_CASE("1D sum reduction with stride 2", "[pooling][sum]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         X = [1, 2, 3, 4, 5, 6]
         Y[i/2] += X[i]
@@ -89,7 +93,8 @@ TEST_CASE("1D sum reduction with stride 2", "[pooling][sum]") {
 }
 
 TEST_CASE("2D max pooling with stride 2", "[pooling][max][2d]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         // 4x4 image
         Image[0, 0] = 1.0
@@ -126,7 +131,8 @@ TEST_CASE("2D max pooling with stride 2", "[pooling][max][2d]") {
 }
 
 TEST_CASE("2D average pooling with stride 2", "[pooling][avg][2d]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         // 4x4 image
         Image[0, 0] = 1.0
@@ -163,7 +169,8 @@ TEST_CASE("2D average pooling with stride 2", "[pooling][avg][2d]") {
 }
 
 TEST_CASE("Pooling with stride 3", "[pooling][stride]") {
-    TensorLogicVM vm;
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
     auto prog = parseProgram(R"(
         X = [1, 2, 3, 4, 5, 6, 7, 8, 9]
         Y[i/3] max= X[i]
