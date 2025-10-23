@@ -4,7 +4,7 @@
 SOURCES := $(wildcard Source/*.cpp) $(wildcard Include/**/*.h)
 
 build: $(SOURCES)
-	cmake --build build
+	cmake --build build -j$(sysctl -n hw.ncpu))
 
 run_ctest: build
 	ctest --test-dir build -C Debug

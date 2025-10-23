@@ -2,6 +2,7 @@
 
 #include "TL/AST.hpp"
 #include "TL/backend.hpp"
+#include "TL/Runtime/ExecutorRegistry.hpp"
 
 #include <memory>
 #include <string>
@@ -73,9 +74,13 @@ public:
   Environment &env() { return env_; }
   const Environment &env() const { return env_; }
 
+  // Legacy method for fallback executor
+  Tensor execTensorEquationLegacy(const TensorEquation &eq);
+
 private:
   void execTensorEquation(const TensorEquation &eq);
   void execQuery(const Query &q);
+  void initializeExecutors();
 
   // Datalog rules support (Phase 2 minimal): forward-chaining to fixpoint
   void saturateRules();
@@ -93,6 +98,7 @@ private:
   std::vector<DatalogRule> rules_;
   bool closureDirty_{false};
   bool debug_{false};
+  ExecutorRegistry executor_registry_;
 };
 
 } // namespace tl

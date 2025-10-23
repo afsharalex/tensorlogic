@@ -27,6 +27,15 @@ add_executable(tl
     Source/AST.cpp
     Source/backend_libtorch.cpp
     Source/VM.cpp
+    Source/Runtime/ExecutorUtils.cpp
+    Source/Runtime/Executors/ScalarAssignExecutor.cpp
+    Source/Runtime/Executors/ListLiteralExecutor.cpp
+    Source/Runtime/Executors/EinsumExecutor.cpp
+    Source/Runtime/Executors/IndexedProductExecutor.cpp
+    Source/Runtime/Executors/ReductionExecutor.cpp
+    Source/Runtime/Executors/IdentityExecutor.cpp
+    Source/Runtime/Executors/PoolingExecutor.cpp
+    Source/Runtime/Executors/ExpressionExecutor.cpp
 )
 
 target_include_directories(tl PRIVATE
@@ -60,6 +69,15 @@ add_executable(tl_tests
     Source/AST.cpp
     Source/VM.cpp
     Source/backend_libtorch.cpp
+    Source/Runtime/ExecutorUtils.cpp
+    Source/Runtime/Executors/ScalarAssignExecutor.cpp
+    Source/Runtime/Executors/ListLiteralExecutor.cpp
+    Source/Runtime/Executors/EinsumExecutor.cpp
+    Source/Runtime/Executors/IndexedProductExecutor.cpp
+    Source/Runtime/Executors/ReductionExecutor.cpp
+    Source/Runtime/Executors/IdentityExecutor.cpp
+    Source/Runtime/Executors/PoolingExecutor.cpp
+    Source/Runtime/Executors/ExpressionExecutor.cpp
 )
 
 target_include_directories(tl_tests PRIVATE

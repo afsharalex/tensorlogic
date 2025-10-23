@@ -1,4 +1,12 @@
 #include "TL/vm.hpp"
+#include "TL/Runtime/Executors/ScalarAssignExecutor.hpp"
+#include "TL/Runtime/Executors/ListLiteralExecutor.hpp"
+#include "TL/Runtime/Executors/EinsumExecutor.hpp"
+#include "TL/Runtime/Executors/IndexedProductExecutor.hpp"
+#include "TL/Runtime/Executors/ReductionExecutor.hpp"
+#include "TL/Runtime/Executors/PoolingExecutor.hpp"
+#include "TL/Runtime/Executors/IdentityExecutor.hpp"
+#include "TL/Runtime/Executors/ExpressionExecutor.hpp"
 
 #include <stdexcept>
 #include <torch/torch.h>
@@ -112,6 +120,24 @@ TensorLogicVM::TensorLogicVM(std::ostream* out, std::ostream* err)
       debug_ = true;
     }
   }
+  initializeExecutors();
+}
+
+void TensorLogicVM::initializeExecutors() {
+  // Register executors in order of priority (lower number = higher priority)
+  executor_registry_.registerExecutor(std::make_unique<ScalarAssignExecutor>());       // 10
+  executor_registry_.registerExecutor(std::make_unique<ListLiteralExecutor>());        // 20
+  executor_registry_.registerExecutor(std::make_unique<EinsumExecutor>());             // 30
+  executor_registry_.registerExecutor(std::make_unique<IndexedProductExecutor>());     // 35
+  executor_registry_.registerExecutor(std::make_unique<ReductionExecutor>());          // 40
+  executor_registry_.registerExecutor(std::make_unique<PoolingExecutor>());            // 50
+  executor_registry_.registerExecutor(std::make_unique<IdentityExecutor>());           // 80
+  executor_registry_.registerExecutor(std::make_unique<ExpressionExecutor>());         // 90
+  // FallbackExecutor removed - no longer needed!
+
+  // Pass debug settings to registry
+  executor_registry_.setDebug(debug_);
+  executor_registry_.setErrOut(error_stream_);
 }
 
 void TensorLogicVM::setDebug(bool enabled) { debug_ = enabled; }
@@ -719,10 +745,24 @@ static bool resolveConcreteIndices(const TensorRef& ref,
 }
 
 void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
+  // New refactored version using ExecutorRegistry
+  try {
+    Tensor result = executor_registry_.execute(eq, env_, *torch_);
+    env_.bind(eq.lhs, result);
+  } catch (const ExecutionError& e) {
+    if (debug_) {
+      debugLog("Execution error: " + std::string(e.what()));
+    }
+    throw;
+  }
+}
+
+Tensor TensorLogicVM::execTensorEquationLegacy(const TensorEquation &eq) {
+  // Legacy monolithic implementation - kept for fallback
   using torch::indexing::Slice;
   using torch::indexing::TensorIndex;
   const std::string lhsName = Environment::key(eq.lhs);
-  if (debug_) debugLog("Execute TensorEquation: " + lhsName);
+  if (debug_) debugLog("Execute TensorEquation (legacy): " + lhsName);
 
   // Case 1: Element-wise numeric assignment, e.g., W[0,1] = 2.0
   double rhsValue = 0.0;
@@ -737,7 +777,7 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
         debugLog(oss.str());
       }
       env_.bind(eq.lhs, t);
-      return;
+      return t;
     } else if (resolveConcreteIndices(eq.lhs, env_, idxs, true)) {
       // Determine required shape (max(index)+1 per dim)
       std::vector<int64_t> reqShape;
@@ -795,7 +835,7 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
         debugLog(oss.str());
       }
       env_.bind(lhsName, t);
-      return;
+      return t;
     }
     // If indices are not numeric, fallthrough to other handlers
   }
@@ -858,7 +898,7 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
         debugLog(oss.str());
       }
       env_.bind(eq.lhs, t);
-      return;
+      return t;
     }
   }
 
@@ -1023,7 +1063,7 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
         }
       }
       env_.bind(eq.lhs, out);
-      return;
+      return out;
     }
   }
 
@@ -1040,7 +1080,7 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
           debugLog(oss.str());
         }
         env_.bind(eq.lhs, sumAll);
-        return;
+        return sumAll;
       }
     }
   }
@@ -1082,7 +1122,7 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
       debugLog(oss.str());
     }
     env_.bind(eq.lhs, result);
-    return;
+    return result;
   }
 
   // General expression evaluation fallback (supports +,-,*,/, step, sqrt, etc.)
@@ -1151,7 +1191,7 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
           debugLog(oss.str());
         }
         env_.bind(lhsName, t);
-        return;
+        return t;
       }
 
       // If LHS is scalar but RHS evaluated to a tensor, auto-reduce by summing all dims
@@ -1169,7 +1209,7 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
         debugLog(oss.str());
       }
       env_.bind(eq.lhs, val);
-      return;
+      return val;
     } catch (const std::exception&) {
       // fall through to other handlers
     }
@@ -1203,12 +1243,13 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
         debugLog(oss.str());
       }
       env_.bind(eq.lhs, src);
-      return;
+      return src;
     }
   }
 
-  // Fallback: not supported yet, just ignore (Phase 1 skeleton)
+  // Fallback: not supported yet, return empty tensor
   if (debug_) debugLog("RHS not supported yet; statement skipped");
+  return torch::tensor(0.0f);
 }
 
 void TensorLogicVM::saturateRules() {
