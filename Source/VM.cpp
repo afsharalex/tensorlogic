@@ -7,6 +7,7 @@
 #include "TL/Runtime/Executors/PoolingExecutor.hpp"
 #include "TL/Runtime/Executors/IdentityExecutor.hpp"
 #include "TL/Runtime/Executors/ExpressionExecutor.hpp"
+#include "TL/Runtime/DatalogEngine.hpp"
 
 #include <stdexcept>
 #include <torch/torch.h>
@@ -111,13 +112,14 @@ BackendType BackendRouter::analyze(const Statement &st) {
 // -------- TensorLogicVM --------
 
 TensorLogicVM::TensorLogicVM(std::ostream* out, std::ostream* err)
-  : output_stream_(out), error_stream_(err) {
+  : output_stream_(out), error_stream_(err), datalog_engine_(env_, out) {
   torch_ = BackendFactory::create(BackendType::LibTorch);
   if (const char* env = std::getenv("TL_DEBUG")) {
     std::string v = env;
     for (auto &c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     if (v == "1" || v == "true" || v == "yes" || v == "on") {
       debug_ = true;
+      datalog_engine_.setDebug(true);
     }
   }
   initializeExecutors();
@@ -140,7 +142,10 @@ void TensorLogicVM::initializeExecutors() {
   executor_registry_.setErrOut(error_stream_);
 }
 
-void TensorLogicVM::setDebug(bool enabled) { debug_ = enabled; }
+void TensorLogicVM::setDebug(bool enabled) {
+  debug_ = enabled;
+  datalog_engine_.setDebug(enabled);
+}
 bool TensorLogicVM::debug() const { return debug_; }
 void TensorLogicVM::debugLog(const std::string &msg) const {
   if (debug_) {
@@ -163,26 +168,12 @@ void TensorLogicVM::execute(const Program &program) {
       execTensorEquation(std::get<TensorEquation>(st));
     } else if (std::holds_alternative<Query>(st)) {
       // Ensure closure is up-to-date before answering queries
-      saturateRules();
+      datalog_engine_.saturate();
       execQuery(std::get<Query>(st));
     } else if (std::holds_alternative<DatalogFact>(st)) {
-      const auto &f = std::get<DatalogFact>(st);
-      const bool inserted = env_.addFact(f);
-      if (inserted) closureDirty_ = true;
-      if (debug_) {
-        std::ostringstream oss;
-        oss << "Added fact: " << f.relation.name << "(";
-        for (size_t i = 0; i < f.constants.size(); ++i) {
-          if (i) oss << ", ";
-          oss << f.constants[i].text;
-        }
-        oss << ")";
-        debugLog(oss.str());
-      }
+      datalog_engine_.addFact(std::get<DatalogFact>(st));
     } else if (std::holds_alternative<DatalogRule>(st)) {
-      rules_.push_back(std::get<DatalogRule>(st));
-      closureDirty_ = true;
-      if (debug_) debugLog("Registered Datalog rule");
+      datalog_engine_.addRule(std::get<DatalogRule>(st));
     } else if (std::holds_alternative<FileOperation>(st)) {
       const auto &fo = std::get<FileOperation>(st);
       auto resolvePath = [](const std::string &p)->std::filesystem::path {
@@ -368,197 +359,10 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
   }
 }
 
-void TensorLogicVM::saturateRules() {
-  if (!closureDirty_ || rules_.empty()) return;
-  size_t totalNew = 0;
-  size_t iter = 0;
-  while (true) {
-    size_t roundNew = 0;
-    for (const auto &r : rules_) {
-      roundNew += applyRule(r);
-    }
-    totalNew += roundNew;
-    ++iter;
-    if (roundNew == 0) break;
-  }
-  if (debug_) {
-    std::ostringstream oss;
-    oss << "Rule saturation finished after fixpoint.";
-    debugLog(oss.str());
-  }
-  closureDirty_ = false;
-}
-
-// Helper: evaluate a simple expression into either numeric or string based on current Datalog bindings
-static bool evalExprBinding(const ExprPtr &e,
-                            const std::unordered_map<std::string, std::string> &binding,
-                            std::string &outStr,
-                            double &outNum,
-                            bool &isNumeric) {
-  if (!e) return false;
-  const Expr &ex = *e;
-  if (const auto *num = std::get_if<ExprNumber>(&ex.node)) {
-    outStr = num->literal.text;
-    try { outNum = std::stod(outStr); isNumeric = true; } catch (...) { isNumeric = false; }
-    return true;
-  }
-  if (const auto *str = std::get_if<ExprString>(&ex.node)) {
-    outStr = str->literal.text;
-    try { outNum = std::stod(outStr); isNumeric = true; } catch (...) { isNumeric = false; }
-    return true;
-  }
-  if (const auto *tr = std::get_if<ExprTensorRef>(&ex.node)) {
-    // Treat lowercase scalar identifiers (no indices) as Datalog variables
-    const std::string &name = tr->ref.name.name;
-    const bool isVar = tr->ref.indices.empty() && !name.empty() && std::islower(static_cast<unsigned char>(name[0])) != 0;
-    if (isVar) {
-      auto it = binding.find(name);
-      if (it == binding.end()) return false; // unbound
-      outStr = it->second;
-      try { outNum = std::stod(outStr); isNumeric = true; } catch (...) { isNumeric = false; }
-      return true;
-    }
-    // Otherwise unsupported in condition
-    return false;
-  }
-  if (const auto *paren = std::get_if<ExprParen>(&ex.node)) {
-    return evalExprBinding(paren->inner, binding, outStr, outNum, isNumeric);
-  }
-  if (const auto *bin = std::get_if<ExprBinary>(&ex.node)) {
-    // Minimal arithmetic support if both sides numeric
-    std::string ls; double ln = 0; bool lnum = false;
-    std::string rs; double rn = 0; bool rnum = false;
-    if (!evalExprBinding(bin->lhs, binding, ls, ln, lnum)) return false;
-    if (!evalExprBinding(bin->rhs, binding, rs, rn, rnum)) return false;
-    if (!lnum || !rnum) return false;
-    double res = 0;
-    switch (bin->op) {
-      case ExprBinary::Op::Add: res = ln + rn; break;
-      case ExprBinary::Op::Sub: res = ln - rn; break;
-      case ExprBinary::Op::Mul: res = ln * rn; break;
-      case ExprBinary::Op::Div: if (rn == 0.0) return false; res = ln / rn; break;
-    }
-    outNum = res; isNumeric = true;
-    std::ostringstream oss; oss << res; outStr = oss.str();
-    return true;
-  }
-  // Lists and calls not supported in conditions
-  return false;
-}
-
-static bool evalCondition(const DatalogCondition &cond,
-                          const std::unordered_map<std::string, std::string> &binding) {
-  std::string ls, rs; double ln = 0, rn = 0; bool lnum = false, rnum = false;
-  if (!evalExprBinding(cond.lhs, binding, ls, ln, lnum)) return false;
-  if (!evalExprBinding(cond.rhs, binding, rs, rn, rnum)) return false;
-
-  auto doStrCmp = [&](const std::string &op) {
-    if (op == "==") return ls == rs;
-    if (op == "!=") return ls != rs;
-    if (op == ">") return ls > rs;
-    if (op == "<") return ls < rs;
-    if (op == ">=") return ls >= rs;
-    if (op == "<=") return ls <= rs;
-    return false;
-  };
-
-  if ((cond.op == "==" || cond.op == "!=") && (!lnum || !rnum)) {
-    return doStrCmp(cond.op);
-  }
-  if (lnum && rnum) {
-    if (cond.op == "==") return ln == rn;
-    if (cond.op == "!=") return ln != rn;
-    if (cond.op == ">") return ln > rn;
-    if (cond.op == "<") return ln < rn;
-    if (cond.op == ">=") return ln >= rn;
-    if (cond.op == "<=") return ln <= rn;
-    return false;
-  }
-  // Mixed types with ordering: fallback to string compare
-  return doStrCmp(cond.op);
-}
-
-size_t TensorLogicVM::applyRule(const DatalogRule &rule) {
-  // Collect body atoms and conditions
-  std::vector<DatalogAtom> bodyAtoms;
-  std::vector<DatalogCondition> conditions;
-  bodyAtoms.reserve(rule.body.size());
-  for (const auto &el : rule.body) {
-    if (const auto *a = std::get_if<DatalogAtom>(&el)) bodyAtoms.push_back(*a);
-    else if (const auto *c = std::get_if<DatalogCondition>(&el)) conditions.push_back(*c);
-  }
-  if (bodyAtoms.empty()) return 0;
-
-  size_t newCount = 0;
-
-  // Depth-first join over body atoms
-  std::unordered_map<std::string, std::string> binding;
-  std::function<void(size_t)> dfs = [&](size_t idx) {
-    if (idx == bodyAtoms.size()) {
-      // Evaluate conditions as filters
-      for (const auto &cond : conditions) {
-        if (!evalCondition(cond, binding)) return; // reject this binding
-      }
-      // Build head tuple
-      std::vector<std::string> headTuple;
-      headTuple.reserve(rule.head.terms.size());
-      for (const auto &t : rule.head.terms) {
-        if (std::holds_alternative<StringLiteral>(t)) {
-          headTuple.push_back(std::get<StringLiteral>(t).text);
-        } else {
-          const std::string &vn = std::get<Identifier>(t).name;
-          auto it = binding.find(vn);
-          if (it == binding.end()) {
-            // Unsafe variable in head: skip
-            return;
-          }
-          headTuple.push_back(it->second);
-        }
-      }
-      if (env_.addFact(rule.head.relation.name, headTuple)) {
-        ++newCount;
-      }
-      return;
-    }
-
-    const DatalogAtom &atom = bodyAtoms[idx];
-    const auto &tuples = env_.facts(atom.relation.name);
-    for (const auto &tup : tuples) {
-      if (tup.size() != atom.terms.size()) continue;
-      // Local modifications to binding; keep a list to rollback
-      std::vector<std::string> assignedVars;
-      bool ok = true;
-      for (size_t i = 0; i < atom.terms.size(); ++i) {
-        const auto &term = atom.terms[i];
-        const std::string &val = tup[i];
-        if (std::holds_alternative<StringLiteral>(term)) {
-          if (std::get<StringLiteral>(term).text != val) { ok = false; break; }
-        } else {
-          const std::string &vn = std::get<Identifier>(term).name;
-          auto it = binding.find(vn);
-          if (it == binding.end()) {
-            binding.emplace(vn, val);
-            assignedVars.push_back(vn);
-          } else if (it->second != val) {
-            ok = false; break;
-          }
-        }
-      }
-      if (ok) {
-        dfs(idx + 1);
-      }
-      // rollback
-      for (const auto &vn : assignedVars) binding.erase(vn);
-    }
-  };
-
-  dfs(0);
-  return newCount;
-}
-
 void TensorLogicVM::execQuery(const Query &q) {
   using torch::indexing::TensorIndex;
-  // Phase 1: support tensor ref queries and print results
+
+  // Handle tensor queries
   if (std::holds_alternative<TensorRef>(q.target)) {
     const auto &ref = std::get<TensorRef>(q.target);
     const std::string name = Environment::key(ref);
@@ -593,182 +397,11 @@ void TensorLogicVM::execQuery(const Query &q) {
       oss << "Query tensor present: shape=" << t.sizes();
       debugLog(oss.str());
     }
-  } else {
-    const auto &atom = std::get<DatalogAtom>(q.target);
-
-    // If this is a conjunctive Datalog query with optional comparisons, evaluate via join
-    if (!q.body.empty()) {
-      // Separate atoms and conditions; ensure first element is included already
-      std::vector<DatalogAtom> atoms;
-      std::vector<DatalogCondition> conditions;
-      atoms.reserve(q.body.size());
-      for (const auto &el : q.body) {
-        if (const auto *a = std::get_if<DatalogAtom>(&el)) atoms.push_back(*a);
-        else if (const auto *c = std::get_if<DatalogCondition>(&el)) conditions.push_back(*c);
-      }
-      if (atoms.empty()) {
-        (*output_stream_) << "None" << std::endl;
-        return;
-      }
-
-      // Determine variable output order across atoms by first appearance
-      std::vector<std::string> varNames;
-      std::unordered_set<std::string> seen;
-      for (const auto &a : atoms) {
-        for (const auto &t : a.terms) {
-          if (const auto *id = std::get_if<Identifier>(&t)) {
-            const std::string &vn = id->name;
-            if (!vn.empty() && std::islower(static_cast<unsigned char>(vn[0])) != 0) {
-              if (!seen.count(vn)) { seen.insert(vn); varNames.push_back(vn); }
-            }
-          }
-        }
-      }
-
-      // DFS join similar to rules
-      std::unordered_map<std::string, std::string> binding;
-      bool anyPrinted = false;
-
-      std::function<void(size_t)> dfs = [&](size_t idx) {
-        if (idx == atoms.size()) {
-          // Evaluate conditions
-          for (const auto &cond : conditions) {
-            if (!evalCondition(cond, binding)) return;
-          }
-          if (varNames.empty()) {
-            (*output_stream_) << "True" << std::endl;
-            anyPrinted = true;
-            return;
-          }
-          if (varNames.size() == 1) {
-            (*output_stream_) << binding[varNames[0]] << std::endl;
-            anyPrinted = true;
-          } else {
-            for (size_t i = 0; i < varNames.size(); ++i) {
-              if (i) (*output_stream_) << ", ";
-              (*output_stream_) << binding[varNames[i]];
-            }
-            (*output_stream_) << std::endl;
-            anyPrinted = true;
-          }
-          return;
-        }
-        const DatalogAtom &a = atoms[idx];
-        const auto &tuples = env_.facts(a.relation.name);
-        for (const auto &tup : tuples) {
-          if (tup.size() != a.terms.size()) continue;
-          std::vector<std::string> assigned;
-          bool ok = true;
-          for (size_t i = 0; i < a.terms.size(); ++i) {
-            const auto &term = a.terms[i];
-            const std::string &val = tup[i];
-            if (std::holds_alternative<StringLiteral>(term)) {
-              if (std::get<StringLiteral>(term).text != val) { ok = false; break; }
-            } else {
-              const std::string &vn = std::get<Identifier>(term).name;
-              auto it = binding.find(vn);
-              if (it == binding.end()) { binding.emplace(vn, val); assigned.push_back(vn); }
-              else if (it->second != val) { ok = false; break; }
-            }
-          }
-          if (ok) dfs(idx + 1);
-          for (const auto &vn : assigned) binding.erase(vn);
-        }
-      };
-
-      dfs(0);
-      if (!anyPrinted) {
-        // Ground conjunctive query with no satisfying assignment
-        if (varNames.empty()) {
-          (*output_stream_) << "False" << std::endl;
-        } else {
-          (*output_stream_) << "None" << std::endl;
-        }
-      }
-      return;
-    }
-
-    const std::string rel = atom.relation.name;
-    if (debug_) {
-      std::ostringstream oss;
-      oss << "Query over Datalog atom: " << rel << "(";
-      for (size_t i = 0; i < atom.terms.size(); ++i) {
-        if (i) oss << ", ";
-        if (std::holds_alternative<Identifier>(atom.terms[i])) oss << std::get<Identifier>(atom.terms[i]).name;
-        else oss << std::get<StringLiteral>(atom.terms[i]).text;
-      }
-      oss << ")?";
-      debugLog(oss.str());
-    }
-
-    // Collect variable positions and names in order of first appearance
-    std::vector<int> varPositions;
-    std::vector<std::string> varNames;
-    std::vector<std::optional<std::string>> constants(atom.terms.size());
-    std::unordered_map<std::string, int> firstPos; // for repeated variable consistency
-
-    for (size_t i = 0; i < atom.terms.size(); ++i) {
-      if (std::holds_alternative<Identifier>(atom.terms[i])) {
-        const std::string &vname = std::get<Identifier>(atom.terms[i]).name;
-        if (!firstPos.count(vname)) {
-          firstPos[vname] = static_cast<int>(i);
-          varPositions.push_back(static_cast<int>(i));
-          varNames.push_back(vname);
-        }
-      } else {
-        constants[i] = std::get<StringLiteral>(atom.terms[i]).text;
-      }
-    }
-
-    const auto &tuples = env_.facts(rel);
-    auto matchesTuple = [&](const std::vector<std::string> &tuple) -> bool {
-      if (tuple.size() != atom.terms.size()) return false;
-      // Check constants
-      for (size_t i = 0; i < constants.size(); ++i) {
-        if (constants[i].has_value() && tuple[i] != *constants[i]) return false;
-      }
-      // Check repeated vars consistency
-      std::unordered_map<std::string, std::string> bind;
-      for (size_t i = 0; i < atom.terms.size(); ++i) {
-        if (std::holds_alternative<Identifier>(atom.terms[i])) {
-          const std::string &vn = std::get<Identifier>(atom.terms[i]).name;
-          auto it = bind.find(vn);
-          if (it == bind.end()) bind.emplace(vn, tuple[i]);
-          else if (it->second != tuple[i]) return false;
-        }
-      }
-      return true;
-    };
-
-    // Ground query (no variables): print True/False
-    if (varNames.empty()) {
-      bool any = false;
-      for (const auto &tup : tuples) { if (matchesTuple(tup)) { any = true; break; } }
-      (*output_stream_) << (any ? "True" : "False") << std::endl;
-      return;
-    }
-
-    // Variable bindings: print each matching binding
-    bool anyPrinted = false;
-    for (const auto &tup : tuples) {
-      if (!matchesTuple(tup)) continue;
-      if (varNames.size() == 1) {
-        (*output_stream_) << tup[varPositions[0]] << std::endl;
-        anyPrinted = true;
-      } else {
-        // Print comma-separated values for the variables in first-appearance order
-        for (size_t i = 0; i < varNames.size(); ++i) {
-          if (i) (*output_stream_) << ", ";
-          (*output_stream_) << tup[varPositions[i]];
-        }
-        (*output_stream_) << std::endl;
-        anyPrinted = true;
-      }
-    }
-    if (!anyPrinted) {
-      (*output_stream_) << "None" << std::endl;
-    }
+    return;
   }
+
+  // Handle Datalog queries - delegate to DatalogEngine
+  datalog_engine_.query(q, *output_stream_);
 }
 
 } // namespace tl

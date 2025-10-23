@@ -28,6 +28,7 @@ add_executable(tl
     Source/backend_libtorch.cpp
     Source/VM.cpp
     Source/Runtime/ExecutorUtils.cpp
+    Source/Runtime/DatalogEngine.cpp
     Source/Runtime/Executors/ScalarAssignExecutor.cpp
     Source/Runtime/Executors/ListLiteralExecutor.cpp
     Source/Runtime/Executors/EinsumExecutor.cpp
@@ -71,6 +72,7 @@ add_executable(tl_tests
     Source/VM.cpp
     Source/backend_libtorch.cpp
     Source/Runtime/ExecutorUtils.cpp
+    Source/Runtime/DatalogEngine.cpp
     Source/Runtime/Executors/ScalarAssignExecutor.cpp
     Source/Runtime/Executors/ListLiteralExecutor.cpp
     Source/Runtime/Executors/EinsumExecutor.cpp
