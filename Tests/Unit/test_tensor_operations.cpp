@@ -206,11 +206,14 @@ TEST_CASE("Identity assignment", "[tensor][identity]") {
     vm.execute(prog);
 
     auto Y = vm.env().lookup("Y");
-    // NOTE: Currently identity assignment Y = X produces a scalar (sum)
-    // This appears to be a bug where Y = X results in Y being the sum of all elements
-    // Expected: Y should be [[1,2],[3,4]]
-    // Actual: Y is scalar 10 (1+2+3+4)
-    REQUIRE_THAT(getScalar(Y), WithinAbs(10.0f, 0.001f));
+    // Identity assignment should copy the full tensor
+    REQUIRE(Y.dim() == 2);
+    REQUIRE(Y.size(0) == 2);
+    REQUIRE(Y.size(1) == 2);
+    REQUIRE_THAT(getTensorValue(Y, {0, 0}), WithinAbs(1.0f, 0.001f));
+    REQUIRE_THAT(getTensorValue(Y, {0, 1}), WithinAbs(2.0f, 0.001f));
+    REQUIRE_THAT(getTensorValue(Y, {1, 0}), WithinAbs(3.0f, 0.001f));
+    REQUIRE_THAT(getTensorValue(Y, {1, 1}), WithinAbs(4.0f, 0.001f));
 }
 
 TEST_CASE("Label-based indexing", "[tensor][labels]") {

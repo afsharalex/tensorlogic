@@ -27,6 +27,16 @@ add_executable(tl
     Source/AST.cpp
     Source/backend_libtorch.cpp
     Source/VM.cpp
+    Source/Runtime/ExecutorUtils.cpp
+    Source/Runtime/DatalogEngine.cpp
+    Source/Runtime/Executors/ScalarAssignExecutor.cpp
+    Source/Runtime/Executors/ListLiteralExecutor.cpp
+    Source/Runtime/Executors/EinsumExecutor.cpp
+    Source/Runtime/Executors/IndexedProductExecutor.cpp
+    Source/Runtime/Executors/ReductionExecutor.cpp
+    Source/Runtime/Executors/IdentityExecutor.cpp
+    Source/Runtime/Executors/PoolingExecutor.cpp
+    Source/Runtime/Executors/ExpressionExecutor.cpp
 )
 
 target_include_directories(tl PRIVATE
@@ -54,12 +64,23 @@ add_executable(tl_tests
     Tests/Unit/test_pooling.cpp
     Tests/Unit/test_datalog.cpp
     Tests/Unit/test_neurosymbolic.cpp
+    Tests/Unit/test_executors.cpp
     # Source files needed for tests
     Source/Parser.cpp
     Source/Lexer.cpp
     Source/AST.cpp
     Source/VM.cpp
     Source/backend_libtorch.cpp
+    Source/Runtime/ExecutorUtils.cpp
+    Source/Runtime/DatalogEngine.cpp
+    Source/Runtime/Executors/ScalarAssignExecutor.cpp
+    Source/Runtime/Executors/ListLiteralExecutor.cpp
+    Source/Runtime/Executors/EinsumExecutor.cpp
+    Source/Runtime/Executors/IndexedProductExecutor.cpp
+    Source/Runtime/Executors/ReductionExecutor.cpp
+    Source/Runtime/Executors/IdentityExecutor.cpp
+    Source/Runtime/Executors/PoolingExecutor.cpp
+    Source/Runtime/Executors/ExpressionExecutor.cpp
 )
 
 target_include_directories(tl_tests PRIVATE

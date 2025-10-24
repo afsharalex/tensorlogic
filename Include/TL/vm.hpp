@@ -2,6 +2,8 @@
 
 #include "TL/AST.hpp"
 #include "TL/backend.hpp"
+#include "TL/Runtime/ExecutorRegistry.hpp"
+#include "TL/Runtime/DatalogEngine.hpp"
 
 #include <memory>
 #include <string>
@@ -76,10 +78,7 @@ public:
 private:
   void execTensorEquation(const TensorEquation &eq);
   void execQuery(const Query &q);
-
-  // Datalog rules support (Phase 2 minimal): forward-chaining to fixpoint
-  void saturateRules();
-  size_t applyRule(const DatalogRule &rule);
+  void initializeExecutors();
 
   void debugLog(const std::string &msg) const;
 
@@ -90,9 +89,9 @@ private:
   std::unique_ptr<TensorBackend> torch_;
   BackendRouter router_;
   Environment env_;
-  std::vector<DatalogRule> rules_;
-  bool closureDirty_{false};
   bool debug_{false};
+  ExecutorRegistry executor_registry_;
+  DatalogEngine datalog_engine_;
 };
 
 } // namespace tl

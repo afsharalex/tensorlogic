@@ -2,9 +2,10 @@
 
 # Collect all source and header files
 SOURCES := $(wildcard Source/*.cpp) $(wildcard Include/**/*.h)
+NUM_CORES := $(shell sysctl -n hw.ncpu)
 
 build: $(SOURCES)
-	cmake --build build
+	cmake --build build -j$(NUM_CORES)
 
 run_ctest: build
 	ctest --test-dir build -C Debug
