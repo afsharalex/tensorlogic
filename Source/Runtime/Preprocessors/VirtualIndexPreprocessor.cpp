@@ -53,6 +53,45 @@ struct IndexCollector {
     }
 };
 
+// Visitor to check if an expression contains any virtual indices
+struct VirtualIndexChecker {
+    bool hasVirtual = false;
+
+    void visit(const Expr& expr) {
+        if (hasVirtual) return; // Short-circuit once found
+        std::visit([this](const auto& node) { this->operator()(node); }, expr.node);
+    }
+
+    void operator()(const ExprTensorRef& ref) {
+        if (hasVirtualIndices(ref.ref.indices)) {
+            hasVirtual = true;
+        }
+    }
+
+    void operator()(const ExprNumber&) {}
+    void operator()(const ExprString&) {}
+    void operator()(const ExprList& lst) {
+        for (const auto& e : lst.elements) {
+            if (hasVirtual) return;
+            visit(*e);
+        }
+    }
+    void operator()(const ExprParen& p) { visit(*p.inner); }
+    void operator()(const ExprCall& c) {
+        for (const auto& arg : c.args) {
+            if (hasVirtual) return;
+            visit(*arg);
+        }
+    }
+    void operator()(const ExprBinary& b) {
+        visit(*b.lhs);
+        if (!hasVirtual) visit(*b.rhs);
+    }
+    void operator()(const ExprUnary& u) {
+        visit(*u.operand);
+    }
+};
+
 // Substitute indices in a TensorRef according to substitution map
 TensorRef substituteIndices(const TensorRef& ref,
                            const std::map<std::string, int>& regularSubs,
@@ -188,7 +227,28 @@ bool VirtualIndexPreprocessor::shouldPreprocess(const Statement& st, const Envir
         return false;
     }
     const auto& eq = std::get<TensorEquation>(st);
-    return hasVirtualIndices(eq.lhs.indices);
+
+    // Check for virtual indices in LHS
+    if (hasVirtualIndices(eq.lhs.indices)) {
+        return true;
+    }
+
+    // Check for virtual indices in RHS
+    for (const auto& clause : eq.clauses) {
+        VirtualIndexChecker checker;
+        checker.visit(*clause.expr);
+        if (checker.hasVirtual) {
+            return true;
+        }
+        if (clause.guard) {
+            checker.visit(**clause.guard);
+            if (checker.hasVirtual) {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 std::vector<Statement> VirtualIndexPreprocessor::preprocess(const Statement& st, Environment& env) {
@@ -201,7 +261,58 @@ std::vector<Statement> VirtualIndexPreprocessor::preprocess(const Statement& st,
     // Step 1: Find virtual index info from LHS
     auto lhsVirtuals = findVirtualIndices(eq.lhs);
     if (lhsVirtuals.empty()) {
-        return {st}; // No virtual indices, pass through
+        // No virtual indices in LHS - check if there are any in RHS
+        // If so, we need to substitute them with their concrete values (not expand)
+        bool hasRhsVirtuals = false;
+        for (const auto& clause : eq.clauses) {
+            VirtualIndexChecker checker;
+            checker.visit(*clause.expr);
+            if (checker.hasVirtual) {
+                hasRhsVirtuals = true;
+                break;
+            }
+        }
+
+        if (hasRhsVirtuals) {
+            // Substitute RHS virtual indices with their concrete values
+            // Virtual index *N simply refers to the concrete value N
+            std::map<std::string, int> regularSubs; // Empty - no regular index substitution
+            std::map<std::pair<std::string, int>, int> virtualSubs;
+
+            // For virtual indices like *5, the parser creates VirtualIndex{name="5", offset=0}
+            // For virtual indices like *t+1, the parser creates VirtualIndex{name="t", offset=1}
+            // Build a mapping from all possible virtual index patterns to their concrete values
+
+            // Handle *N syntax (name=N as string, offset=0)
+            for (int n = 0; n <= 20; ++n) {
+                virtualSubs[{std::to_string(n), 0}] = n;
+            }
+
+            // FIXME: We need to use the actual index names; not a list of common names and guess!
+            // Handle *name+offset syntax (e.g., *t+1, *t-1)
+            for (int offset = -10; offset <= 10; ++offset) {
+                virtualSubs[{"t", offset}] = offset;
+                // Add common names
+                virtualSubs[{"i", offset}] = offset;
+                virtualSubs[{"j", offset}] = offset;
+                virtualSubs[{"k", offset}] = offset;
+                virtualSubs[{"n", offset}] = offset;
+            }
+
+            TensorEquation concreteEq = eq;
+            for (size_t clauseIdx = 0; clauseIdx < concreteEq.clauses.size(); ++clauseIdx) {
+                concreteEq.clauses[clauseIdx].expr =
+                    substituteIndicesInExpr(eq.clauses[clauseIdx].expr, regularSubs, virtualSubs);
+                if (eq.clauses[clauseIdx].guard) {
+                    concreteEq.clauses[clauseIdx].guard =
+                        substituteIndicesInExpr(*eq.clauses[clauseIdx].guard, regularSubs, virtualSubs);
+                }
+            }
+
+            return {concreteEq};
+        }
+
+        return {st}; // No virtual indices at all, pass through
     }
 
     // For now, we only support single virtual index on LHS

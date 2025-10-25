@@ -282,9 +282,8 @@ namespace tl {
             const auto* rightRef = asExprTensorRef(bin->rhs);
             if (!leftRef || !rightRef) return false;
 
-            if (hasNumericIndices(leftRef->ref) || hasNumericIndices(rightRef->ref) || hasNumericIndices(lhs)) {
-                return false;
-            }
+            // Allow numeric indices - they will be handled by valueForRef() which properly slices tensors
+            // This enables patterns like W[i,j] State[j,0] where 0 is a bound index
 
             auto collectNames = [](const TensorRef& r){
                 std::vector<std::string> names; names.reserve(r.indices.size());
@@ -323,13 +322,41 @@ namespace tl {
             spec_out = a + "," + b + "->" + out;
 
             inputs_out.clear();
-            const std::string leftName = leftRef->ref.name.name;
-            if (!env.has(leftName)) env.bind(leftRef->ref, placeholderForRef(leftRef->ref));
-            inputs_out.push_back(adaptTensorToRef(env.lookup(leftRef->ref), leftRef->ref));
 
+            // Use valueForRef() instead of env.lookup() to properly handle mixed bound/free indices
+            // For example, State[j,0] will be correctly sliced to State[:,0] before einsum
+
+            // For left operand: create placeholder for base tensor if needed, then slice
+            const std::string leftName = leftRef->ref.name.name;
+            if (!env.has(leftName)) {
+                // Create a TensorRef with only free variable indices for placeholder shape inference
+                TensorRef baseRef = leftRef->ref;
+                // Remove numeric indices - keep only identifiers for shape inference
+                std::vector<Index> freeIndices;
+                for (const auto& idx : baseRef.indices) {
+                    if (std::holds_alternative<Identifier>(idx.value)) {
+                        freeIndices.push_back(idx);
+                    }
+                }
+                baseRef.indices = freeIndices;
+                env.bind(leftName, placeholderForRef(baseRef));
+            }
+            inputs_out.push_back(valueForRef(leftRef->ref, env));
+
+            // For right operand: same approach
             const std::string rightName = rightRef->ref.name.name;
-            if (!env.has(rightName)) env.bind(rightRef->ref, placeholderForRef(rightRef->ref));
-            inputs_out.push_back(adaptTensorToRef(env.lookup(rightRef->ref), rightRef->ref));
+            if (!env.has(rightName)) {
+                TensorRef baseRef = rightRef->ref;
+                std::vector<Index> freeIndices;
+                for (const auto& idx : baseRef.indices) {
+                    if (std::holds_alternative<Identifier>(idx.value)) {
+                        freeIndices.push_back(idx);
+                    }
+                }
+                baseRef.indices = freeIndices;
+                env.bind(rightName, placeholderForRef(baseRef));
+            }
+            inputs_out.push_back(valueForRef(rightRef->ref, env));
 
             return true;
         }
