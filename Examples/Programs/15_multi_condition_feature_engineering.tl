@@ -30,9 +30,9 @@ RiskScore[i] = 1.0 : (Age[i] < 18.0)
 
 // Expected results:
 // RiskScore[0] = 1.0  (minor, high risk)
-// RiskScore[1] = 0.5  (young adult, low income)
-// RiskScore[2] = 0.2  (adult, good income)
+// RiskScore[1] = 1.0  (young adult, low income)
+// RiskScore[2] = 0.3  (adult, good income)
 // RiskScore[3] = 0.2  (adult, good income)
-// RiskScore[4] = 0.6  (senior, low income)
+// RiskScore[4] = 0.4  (senior, low income)
 
 RiskScore[i]?
