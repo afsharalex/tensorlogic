@@ -3,6 +3,7 @@
 #include "TL/AST.hpp"
 #include "TL/backend.hpp"
 #include "TL/Runtime/ExecutorRegistry.hpp"
+#include "TL/Runtime/PreprocessorRegistry.hpp"
 #include "TL/Runtime/DatalogEngine.hpp"
 
 #include <memory>
@@ -79,6 +80,7 @@ private:
   void execTensorEquation(const TensorEquation &eq);
   void execQuery(const Query &q);
   void initializeExecutors();
+  void initializePreprocessors();
 
   void debugLog(const std::string &msg) const;
 
@@ -90,6 +92,7 @@ private:
   BackendRouter router_;
   Environment env_;
   bool debug_{false};
+  PreprocessorRegistry preprocessor_registry_;
   ExecutorRegistry executor_registry_;
   DatalogEngine datalog_engine_;
 };

@@ -121,13 +121,13 @@ namespace tl {
             // Resize and copy
             Tensor resized = torch::zeros(new_shape, opts);
 
-            // Calculate slice ranges for copying old data
+            // Use proper slice assignment to copy old data
             std::vector<torch::indexing::TensorIndex> slice_indices;
             for (int64_t dim_size: current_shape) {
                 slice_indices.push_back(torch::indexing::Slice(0, dim_size));
             }
 
-            resized.index_put_(slice_indices, current);
+            resized.index(slice_indices).copy_(current);
 
             return resized;
         }

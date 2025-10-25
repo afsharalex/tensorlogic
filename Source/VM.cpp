@@ -8,6 +8,7 @@
 #include "TL/Runtime/Executors/PoolingExecutor.hpp"
 #include "TL/Runtime/Executors/IdentityExecutor.hpp"
 #include "TL/Runtime/Executors/ExpressionExecutor.hpp"
+#include "TL/Runtime/Preprocessors/VirtualIndexPreprocessor.hpp"
 #include "TL/Runtime/DatalogEngine.hpp"
 
 #include <stdexcept>
@@ -123,7 +124,17 @@ TensorLogicVM::TensorLogicVM(std::ostream* out, std::ostream* err)
       datalog_engine_.setDebug(true);
     }
   }
+  initializePreprocessors();
   initializeExecutors();
+}
+
+void TensorLogicVM::initializePreprocessors() {
+  // Register preprocessors in order of priority (lower number = processed first)
+  preprocessor_registry_.registerPreprocessor(std::make_unique<VirtualIndexPreprocessor>()); // 5
+
+  // Pass debug settings to registry
+  preprocessor_registry_.setDebug(debug_);
+  preprocessor_registry_.setErrOut(error_stream_);
 }
 
 void TensorLogicVM::initializeExecutors() {
@@ -137,7 +148,7 @@ void TensorLogicVM::initializeExecutors() {
   executor_registry_.registerExecutor(std::make_unique<PoolingExecutor>());            // 50
   executor_registry_.registerExecutor(std::make_unique<IdentityExecutor>());           // 80
   executor_registry_.registerExecutor(std::make_unique<ExpressionExecutor>());         // 90
-  // FallbackExecutor removed - no longer needed!
+  // VirtualIndexExecutor removed - now handled by VirtualIndexPreprocessor!
 
   // Pass debug settings to registry
   executor_registry_.setDebug(debug_);
@@ -146,6 +157,8 @@ void TensorLogicVM::initializeExecutors() {
 
 void TensorLogicVM::setDebug(bool enabled) {
   debug_ = enabled;
+  preprocessor_registry_.setDebug(enabled);
+  executor_registry_.setDebug(enabled);
   datalog_engine_.setDebug(enabled);
 }
 bool TensorLogicVM::debug() const { return debug_; }
@@ -161,24 +174,30 @@ void TensorLogicVM::execute(const Program &program) {
     if (debug_) {
       debugLog("Stmt " + std::to_string(i) + ": " + toString(st));
     }
-    const BackendType be = router_.analyze(st);
-    if (debug_) {
-      debugLog(std::string("Router selected backend: ") + (be == BackendType::LibTorch ? "LibTorch" : "Unknown"));
-    }
 
-    if (std::holds_alternative<TensorEquation>(st)) {
-      execTensorEquation(std::get<TensorEquation>(st));
-    } else if (std::holds_alternative<Query>(st)) {
-      // Ensure closure is up-to-date before answering queries
-      datalog_engine_.saturate();
-      execQuery(std::get<Query>(st));
-    } else if (std::holds_alternative<DatalogFact>(st)) {
-      datalog_engine_.addFact(std::get<DatalogFact>(st));
-    } else if (std::holds_alternative<DatalogRule>(st)) {
-      datalog_engine_.addRule(std::get<DatalogRule>(st));
-    } else if (std::holds_alternative<FileOperation>(st)) {
-      const auto &fo = std::get<FileOperation>(st);
-      auto resolvePath = [](const std::string &p)->std::filesystem::path {
+    // FIRST: Preprocess statement (may expand into multiple statements)
+    auto preprocessed = preprocessor_registry_.preprocess(st, env_);
+
+    // THEN: Execute each preprocessed statement
+    for (const auto &preprocessed_st : preprocessed) {
+      const BackendType be = router_.analyze(preprocessed_st);
+      if (debug_ && preprocessed.size() > 1) {
+        debugLog("  Preprocessed: " + toString(preprocessed_st));
+      }
+
+      if (std::holds_alternative<TensorEquation>(preprocessed_st)) {
+        execTensorEquation(std::get<TensorEquation>(preprocessed_st));
+      } else if (std::holds_alternative<Query>(preprocessed_st)) {
+        // Ensure closure is up-to-date before answering queries
+        datalog_engine_.saturate();
+        execQuery(std::get<Query>(preprocessed_st));
+      } else if (std::holds_alternative<DatalogFact>(preprocessed_st)) {
+        datalog_engine_.addFact(std::get<DatalogFact>(preprocessed_st));
+      } else if (std::holds_alternative<DatalogRule>(preprocessed_st)) {
+        datalog_engine_.addRule(std::get<DatalogRule>(preprocessed_st));
+      } else if (std::holds_alternative<FileOperation>(preprocessed_st)) {
+        const auto &fo = std::get<FileOperation>(preprocessed_st);
+        auto resolvePath = [](const std::string &p)->std::filesystem::path {
         std::filesystem::path path(p);
         if (path.is_absolute()) return path;
         // Try as-is relative to CWD
@@ -307,14 +326,15 @@ void TensorLogicVM::execute(const Program &program) {
         writeTensorToFile(fo.file.text, src);
         if (debug_) {
           std::ostringstream oss; oss << "Wrote tensor " << Environment::key(fo.tensor) << " shape=" << src.sizes() << " to '" << fo.file.text << "'";
-          debugLog(oss.str());
+            debugLog(oss.str());
+          }
         }
+      } else {
+        // Unknown statement kind
+        if (debug_) debugLog("Skipping non-tensor statement (not yet implemented)");
       }
-    } else {
-      // Unknown statement kind
-      if (debug_) debugLog("Skipping non-tensor statement (not yet implemented)");
-    }
-  }
+    } // end for each preprocessed statement
+  } // end for each original statement
 }
 
 // Resolve indices to concrete integer positions using either numeric indices
@@ -351,7 +371,45 @@ static bool resolveConcreteIndices(const TensorRef& ref,
 void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
   // New refactored version using ExecutorRegistry
   try {
+    std::string lhsName = Environment::key(eq.lhs);
     Tensor result = executor_registry_.execute(eq, env_, *torch_);
+
+    // Special case: indexed LHS (e.g., avg[1] = expr)
+    // Some executors (ScalarAssignExecutor) handle this internally and return the full tensor.
+    // Others (ExpressionExecutor for non-literal RHS) just return the RHS value.
+    // We need to detect the latter case and do the indexed assignment ourselves.
+    if (!eq.lhs.indices.empty() && env_.has(lhsName)) {
+      Tensor existingTensor = env_.lookup(lhsName);
+
+      // Check if result is smaller than existing tensor (indicating executor returned RHS value)
+      // In this case, we need to do indexed assignment
+      if (result.numel() < existingTensor.numel() || result.dim() == 0) {
+        // Build index list from LHS indices
+        // Identifiers (free variables like 'i') become Slice()
+        // NumberLiterals (concrete like '1') become concrete indices
+        std::vector<torch::indexing::TensorIndex> indices;
+        bool hasConcreteIndex = false;
+        for (const auto& idx : eq.lhs.indices) {
+          if (const auto* num = std::get_if<NumberLiteral>(&idx.value)) {
+            long long v = std::stoll(num->text);
+            indices.push_back(static_cast<int64_t>(v));
+            hasConcreteIndex = true;
+          } else if (std::holds_alternative<Identifier>(idx.value)) {
+            // Free variable - use slice to cover all values in that dimension
+            indices.push_back(torch::indexing::Slice());
+          }
+        }
+
+        // Only do indexed assignment if we have at least one concrete index
+        // Otherwise, it's a full tensor assignment
+        if (hasConcreteIndex && !indices.empty()) {
+          existingTensor.index_put_(indices, result);
+          return;  // Don't rebind - we modified in-place
+        }
+      }
+    }
+
+    // Default case: bind result to environment
     env_.bind(eq.lhs, result);
   } catch (const ExecutionError& e) {
     if (debug_) {

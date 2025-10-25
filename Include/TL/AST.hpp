@@ -26,9 +26,16 @@ struct StringLiteral {
     SourceLocation loc{};
 };
 
+// Virtual index for recurrent operations: *t, *t+1, *t-1
+struct VirtualIndex {
+    Identifier name;     // The identifier after *, e.g., 't' in '*t'
+    int offset{0};       // Offset: +1, 0, or -1 (for *t+1, *t, *t-1)
+    SourceLocation loc{};
+};
+
 struct Index {
-    // For now only a simple identifier or integer index
-    std::variant<Identifier, NumberLiteral> value;
+    // Can be a simple identifier, integer literal, or virtual index
+    std::variant<Identifier, NumberLiteral, VirtualIndex> value;
     SourceLocation loc{};
 };
 
