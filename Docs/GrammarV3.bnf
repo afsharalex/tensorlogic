@@ -1,0 +1,502 @@
+(* ========================================
+   TENSOR LOGIC - COMPLETE BNF GRAMMAR V3
+   Integrating: GrammarV2 + Design Decisions + Learning Directives
+   Date: 2025-10-25
+   ======================================== *)
+
+(* ========================================
+   TOP LEVEL CONSTRUCTS
+   ======================================== *)
+
+<program> ::= <statement>*
+
+<statement> ::= <tensor_equation>
+              | <datalog_fact>
+              | <datalog_rule>
+              | <query>
+              | <file_operation>
+              | <comment>
+
+(* ========================================
+   FILE OPERATIONS
+   ======================================== *)
+
+<file_operation> ::= <tensor_ref> "=" <file_literal>
+                   | <file_literal> "=" <tensor_ref>
+
+<file_literal> ::= "file(" <string_literal> ")"
+                 | <string_literal>  (* Direct string interpreted as filename *)
+
+(* ========================================
+   TENSOR EQUATIONS
+   ======================================== *)
+
+<tensor_equation> ::= <tensor_lhs> <projection_op> <tensor_rhs>
+
+<tensor_lhs> ::= <identifier> "[" <index_list> "]"
+               | <identifier>  (* scalar case *)
+
+<tensor_rhs> ::= <clause_expression>
+
+(* Guarded Clauses - NEW in V3 (from tensor-logic-decisions.md)
+   Multiple clauses chained with | contribute additively.
+   Each clause may have a guard introduced by :
+   Example: A[i] = Expr1 : Cond1 | Expr2 : Cond2 | Expr3
+*)
+<clause_expression> ::= <guarded_clause>
+                      | <clause_expression> "|" <guarded_clause>
+
+<guarded_clause> ::= <tensor_expression> ":" <guard_condition>
+                   | <tensor_expression>  (* unguarded - always contributes *)
+
+(* Guard conditions use logical operators: and, or, not
+   NOT using &&, ||, ! - those are reserved for other uses *)
+<guard_condition> ::= <guard_term>
+                    | <guard_condition> "or" <guard_term>
+
+<guard_term> ::= <guard_factor>
+               | <guard_term> "and" <guard_factor>
+
+<guard_factor> ::= "not" <guard_factor>
+                 | "(" <guard_condition> ")"
+                 | <comparison_expression>
+                 | <function_name> "(" <term> ")"  (* Boolean predicate like Even(d) *)
+
+(* Tensor expressions (without guard syntax) *)
+<tensor_expression> ::= <additive_expression>
+
+<additive_expression> ::= <multiplicative_expression>
+                        | <additive_expression> "+" <multiplicative_expression>
+                        | <additive_expression> "-" <multiplicative_expression>
+
+<multiplicative_expression> ::= <power_expression>
+                              | <multiplicative_expression> <power_expression>  (* implicit multiplication *)
+                              | <multiplicative_expression> "*" <power_expression>  (* explicit multiplication *)
+                              | <multiplicative_expression> "/" <power_expression>
+
+(* Exponentiation - NEW in V3 (right-associative) *)
+<power_expression> ::= <unary_expression>
+                     | <unary_expression> "^" <power_expression>
+
+<unary_expression> ::= "-" <unary_expression>
+                     | <primary_expression>
+
+<primary_expression> ::= <tensor_ref>
+                       | <scalar_literal>
+                       | <array_literal>
+                       | <nonlinearity_call>
+                       | "(" <tensor_expression> ")"
+
+(* Comparison expressions for masks and boolean tensors *)
+<comparison_expression> ::= <additive_expression> <comparison_op> <additive_expression>
+
+<comparison_op> ::= ">" | "<" | ">=" | "<=" | "==" | "!="
+
+<tensor_ref> ::= <identifier> "[" <index_list> "]"
+               | <identifier> "[" <slice_list> "]"
+               | <identifier>  (* scalar or zero-rank tensor *)
+               | <identifier> "(" <term_list> ")"  (* Boolean tensor in Datalog syntax *)
+
+(* ========================================
+   INDICES
+   ======================================== *)
+
+<index_list> ::= <index>
+               | <index> "," <index_list>
+
+<index> ::= <simple_index>
+          | <virtual_index>
+          | <normalized_index>
+          | <index_expression>
+
+<simple_index> ::= <identifier>
+
+(* Virtual index - NEW in V3 (from tensor-logic-decisions.md)
+   Restricted to: *t, *t+1, *t-1 (no arbitrary arithmetic)
+   Used for recurrent state without allocating time dimension *)
+<virtual_index> ::= "*" <identifier>
+                  | "*" <identifier> "+" <integer_literal>
+                  | "*" <identifier> "-" <integer_literal>
+
+(* Note: Only +1 and -1 are semantically valid offsets for virtual indices.
+   Parser may accept other integers but should warn/error at semantic analysis. *)
+
+(* Normalized index (for softmax, etc.)
+   The dot after the identifier indicates that normalization
+   should be performed over this dimension *)
+<normalized_index> ::= <identifier> "."
+
+(* Index with arithmetic - extended for complex expressions *)
+<index_expression> ::= <arith_index_term>
+                     | <index_expression> "+" <arith_index_term>
+                     | <index_expression> "-" <arith_index_term>
+
+<arith_index_term> ::= <arith_index_factor>
+                     | <arith_index_term> "*" <arith_index_factor>
+                     | <arith_index_term> "/" <arith_index_factor>
+                     | <arith_index_term> "%" <arith_index_factor>
+
+<arith_index_factor> ::= <identifier>
+                       | <integer_literal>
+                       | <float_literal>
+                       | <arith_index_factor> "^" <arith_index_factor>  (* exponentiation *)
+                       | "(" <index_expression> ")"
+                       | <function_name> "(" <index_expression> ")"
+
+(* ========================================
+   PROJECTION OPERATORS
+   ======================================== *)
+
+<projection_op> ::= "="      (* default: sum *)
+                  | "+="     (* explicit sum *)
+                  | "max="   (* max pooling *)
+                  | "avg="   (* average pooling *)
+                  | "min="   (* min pooling *)
+
+(* Note: Multiple equations with the same LHS are implicitly summed.
+   Example: A[i] = B[i] and A[i] = C[i] is equivalent to A[i] = B[i] + C[i] *)
+
+(* ========================================
+   SLICING
+   ======================================== *)
+
+<slice_list> ::= <slice>
+               | <slice> "," <slice_list>
+
+<slice> ::= <index>
+          | <integer_literal> ":" <integer_literal>                    (* start:end *)
+          | <integer_literal> ":" <integer_literal> ":" <integer_literal>  (* start:end:step *)
+          | ":"                                         (* all elements *)
+          | ":" <integer_literal>                       (* :end *)
+          | <integer_literal> ":"                       (* start: *)
+
+(* ========================================
+   NONLINEARITIES / FUNCTIONS
+   ======================================== *)
+
+<nonlinearity_call> ::= <function_name> "(" <tensor_expression> ")"
+                      | <function_name> "(" <argument_list> ")"
+
+<function_name> ::= "relu" | "sigmoid" | "tanh" | "softmax"
+                  | "step" | "H"  (* Heaviside step function *)
+                  | "exp" | "log" | "sqrt"
+                  | "sin" | "cos" | "tan"
+                  | "lnorm"  (* layer normalization *)
+                  | "concat"
+                  | "sig"    (* sigmoid abbreviation *)
+                  | "Even" | "Odd"  (* conditional predicates *)
+                  | <identifier>  (* user-defined or procedural attachment *)
+
+<argument_list> ::= <tensor_expression>
+                  | <tensor_expression> "," <argument_list>
+
+(* ========================================
+   DATALOG CONSTRUCTS
+   ======================================== *)
+
+(* Datalog fact - uses parentheses instead of brackets
+   Parentheses denote Boolean tensors *)
+<datalog_fact> ::= <relation_name> "(" <constant_list> ")"
+
+<datalog_rule> ::= <atom> "<-" <body_literal_list>
+                 | <atom> "←" <body_literal_list>  (* Unicode arrow alternative *)
+
+<atom> ::= <relation_name> "(" <term_list> ")"
+
+(* Body literals can be atoms, comparisons, or negations *)
+<body_literal_list> ::= <body_literal>
+                      | <body_literal> "," <body_literal_list>
+
+<body_literal> ::= <atom>
+                 | <comparison_literal>
+                 | <negated_literal>
+
+(* Comparison literals for inequality constraints in rules *)
+<comparison_literal> ::= <term> <comparison_op> <term>
+
+(* Negation (for stratified Datalog extensions) *)
+<negated_literal> ::= "not" <atom>
+                    | "!" <atom>
+                    | "¬" <atom>  (* Unicode negation alternative *)
+
+<term_list> ::= <term>
+              | <term> "," <term_list>
+
+<term> ::= <variable>
+         | <constant>
+         | <arithmetic_term_expr>
+
+(* Arithmetic expressions in terms (for evaluation in constraints) *)
+<arithmetic_term_expr> ::= <term> "+" <term>
+                         | <term> "-" <term>
+                         | <term> "*" <term>
+                         | <term> "/" <term>
+                         | <term> "^" <term>  (* exponentiation *)
+                         | "(" <arithmetic_term_expr> ")"
+
+<variable> ::= <lowercase_identifier>
+
+<constant> ::= <uppercase_identifier>
+             | <integer_literal>
+             | <float_literal>
+             | <string_literal>
+
+<constant_list> ::= <constant>
+                  | <constant> "," <constant_list>
+
+(* ========================================
+   QUERIES AND DIRECTIVES
+   ======================================== *)
+
+(* Queries with optional learning directives - NEW in V3 *)
+<query> ::= <query_base> <query_directive>?
+
+<query_base> ::= <atom> "?"
+               | <identifier> "?"
+               | <tensor_ref> "?"
+
+(* Learning directives using @ syntax
+   Examples:
+     Loss? @minimize(lr=0.01, epochs=100)
+     Reward? @maximize(lr=0.001, epochs=500)
+     P_Y? @sample(n=1000)
+*)
+<query_directive> ::= "@" <directive_name> "(" <directive_args>? ")"
+
+<directive_name> ::= "minimize"
+                   | "maximize"
+                   | "sample"
+                   | <identifier>  (* extensible *)
+
+<directive_args> ::= <directive_arg>
+                   | <directive_arg> "," <directive_args>
+
+<directive_arg> ::= <identifier> "=" <literal_value>
+
+<literal_value> ::= <number>
+                  | <string_literal>
+                  | <boolean>
+
+(* ========================================
+   LITERALS AND IDENTIFIERS
+   ======================================== *)
+
+<scalar_literal> ::= <number>
+                   | <boolean>
+
+<number> ::= <integer_literal>
+           | <float_literal>
+
+<integer_literal> ::= <digit>+
+                    | "-" <digit>+
+
+<float_literal> ::= <digit>+ "." <digit>*
+                  | <digit>* "." <digit>+
+                  | "-" <digit>+ "." <digit>*
+                  | "-" <digit>* "." <digit>+
+                  | <digit>+ ("e" | "E") ("+" | "-")? <digit>+
+                  | "-" <digit>+ ("e" | "E") ("+" | "-")? <digit>+
+
+<boolean> ::= "true" | "false" | "True" | "False"
+
+<string_literal> ::= '"' <string_char>* '"'
+                   | "'" <string_char>* "'"
+
+<identifier> ::= <letter> (<letter> | <digit> | "_")*
+
+<lowercase_identifier> ::= <lowercase_letter> (<letter> | <digit> | "_")*
+
+<uppercase_identifier> ::= <uppercase_letter> (<letter> | <digit> | "_")*
+
+<relation_name> ::= <uppercase_identifier>
+
+(* ========================================
+   TENSOR LITERALS (Extension)
+   ======================================== *)
+
+<array_literal> ::= "[" <literal_elements> "]"
+                  | "[" <array_rows> "]"  (* for matrices *)
+
+<literal_elements> ::= <number>
+                     | <number> "," <literal_elements>
+
+<array_rows> ::= <array_literal>
+               | <array_literal> "," <array_rows>
+
+(* ========================================
+   COMMENTS
+   ======================================== *)
+
+<comment> ::= "//" <any_char_except_newline>* <newline>
+            | "/*" <any_char>* "*/"
+
+(* ========================================
+   BASIC LEXICAL ELEMENTS
+   ======================================== *)
+
+<letter> ::= <uppercase_letter> | <lowercase_letter>
+
+<uppercase_letter> ::= "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I"
+                     | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R"
+                     | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z"
+
+<lowercase_letter> ::= "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i"
+                     | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r"
+                     | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z"
+
+<digit> ::= "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+
+<string_char> ::= <any_char_except_quote_or_backslash>
+                | "\\" <escape_sequence>
+
+<escape_sequence> ::= "n" | "t" | "r" | "\\" | '"' | "'" | "0"
+
+(* ========================================
+   SEMANTIC NOTES
+   ======================================== *)
+
+(*
+IMPORTANT SEMANTIC RULES:
+
+1. GUARDED CLAUSES (NEW IN V3):
+   Tensor equations can consist of multiple clauses chained with |.
+   Each clause can have an optional guard introduced by :.
+
+   Example:
+     Weighted[i] =
+         1.0 * X[i] : (i < 10 or i > 20)
+       | 0.5 * X[i] : (i >= 10 and i <= 20 and (i % 2) == 0)
+       | 0.1 * X[i]
+
+   Semantics:
+   - Each guarded clause "Expr : Condition" evaluates to "Expr * mask(Condition)"
+   - mask(Condition) is a 0/1 tensor (1 where condition holds, 0 elsewhere)
+   - ALL clauses contribute additively (this is NOT if/else!)
+   - Unguarded clauses always contribute (equivalent to ": true")
+
+   This preserves the paper's core philosophy:
+   - No imperative branching
+   - Logic expressed as masks over index bindings
+   - Multiple contributions superimpose
+
+   Guard conditions use logical operators: and, or, not (NOT &&, ||, !)
+
+2. VIRTUAL INDICES (NEW IN V3 - RESTRICTED FORM):
+   Indices prefixed with * are virtual (not allocated in memory).
+   Restricted to: *t, *t+1, *t-1 (no arbitrary arithmetic like *t*2 or *t+k).
+
+   Example:
+     State[i, *t+1] =
+         relu(
+             W[i,j] * State[j, *t]
+           + U[i,k] * Input[k, t]
+         )
+
+   Semantics:
+   - *t = current state (read from single buffer)
+   - *t+1 = next state (write to same buffer, replacing current)
+   - *t-1 = previous state (if needed)
+   - Single-buffer or ring-buffer implementation
+   - No random temporal addressing (use plain 't' for that)
+
+   This enables RNN-like recurrence without explicit loops or time dimensions.
+
+3. LEARNING DIRECTIVES (NEW IN V3):
+   Queries can be followed by @ directives for learning/optimization.
+
+   Examples:
+     Loss? @minimize(lr=0.01, epochs=100)
+     Reward? @maximize(lr=0.001, epochs=500)
+     P_Y? @sample(n=1000)
+     Y?  (* Regular query, no directive *)
+
+   This provides:
+   - Clear separation of query vs meta-instruction
+   - Extensible directive system
+   - Explicit intent (minimize vs maximize vs sample)
+
+4. IMPLICIT SUMMATION:
+   Multiple equations with the same left-hand side are implicitly summed.
+   Example:
+     A[i] = B[i]
+     A[i] = C[i]
+   Is equivalent to: A[i] = B[i] + C[i]
+
+5. DEFAULT VALUES:
+   Tensor elements are 0 by default unless explicitly set.
+
+6. BOOLEAN TENSORS:
+   Tensors denoted with parentheses instead of square brackets are Boolean.
+   Example: Neig(x, y) is equivalent to Boolean Neig[x, y]
+
+7. NORMALIZED INDICES:
+   Indices suffixed with . indicate normalization (e.g., softmax) over that dimension.
+   Example: Comp[p, p'.] means apply softmax over the p' dimension for each p.
+
+8. PROJECTION:
+   Indices appearing on the RHS but not on the LHS are summed over (projected out).
+   Example: Y[i] = W[i, j] X[j]  (j is summed over)
+
+9. JOIN:
+   Tensors appearing on the RHS are joined (element-wise multiplied).
+   Repeated indices indicate which dimensions to join on.
+
+10. FILE I/O:
+    Setting a tensor equal to a file reads the file into the tensor.
+    Setting a file equal to a tensor writes the tensor to the file.
+    Text files are read as Boolean matrices: M[position, word] = 1 if word at position.
+
+11. TYPE INFERENCE:
+    Tensor types may be declared explicitly or inferred from usage.
+
+12. EINSUM SEMANTICS:
+    Tensor equations follow Einstein summation convention:
+    - Repeated indices are summed over
+    - Non-repeated indices form the output dimensions
+    - Join is implicit (no explicit operator needed)
+
+13. DATALOG RULE COMPARISONS:
+    Comparison literals can appear in rule bodies to constrain variable bindings.
+    Examples:
+      Ancestor(x, z) <- Ancestor(x, y), Parent(y, z), x != z
+      Adult(p) <- Age(p, a), a >= 18
+
+    Supported comparison operators: !=, ==, <, >, <=, >=
+
+    Safety requirement: Variables in comparisons must appear in at least one
+    positive atom in the rule body (standard Datalog safety constraint).
+
+14. NEGATION IN RULES:
+    Negation (not, !, ¬) is supported for stratified negation.
+    Safety requirement: All variables in a negated literal must appear in
+    at least one positive atom before the negation.
+    Example: NotAncestor(x, y) <- Person(x), Person(y), not Ancestor(x, y)
+
+15. REFLEXIVE RELATIONSHIPS:
+    Transitive closure rules will derive reflexive relationships when cycles exist,
+    unless explicitly prevented with inequality constraints.
+    Example: Without x != z, the rule Knows(x,z) <- Friend(x,y), Friend(y,z)
+    will derive Knows(Alice, Alice) if Friend(Alice, Bob) and Friend(Bob, Alice) exist.
+
+16. OPERATOR PRECEDENCE (highest to lowest):
+    1. Function calls, parentheses
+    2. Unary minus (-)
+    3. Exponentiation (^) - right-associative
+    4. Implicit/explicit multiplication (*), division (/)
+    5. Addition (+), subtraction (-)
+    6. Comparisons (<, >, <=, >=, ==, !=)
+    7. Logical not
+    8. Logical and
+    9. Logical or
+    10. Guard separator (:)
+    11. Clause separator (|)
+
+17. KEYWORDS:
+    Reserved words: not, and, or, true, false, True, False
+    (Note: ! and ¬ are operators, not keywords)
+
+*)
+
+(* ========================================
+   END OF GRAMMAR V3
+   ======================================== *)
