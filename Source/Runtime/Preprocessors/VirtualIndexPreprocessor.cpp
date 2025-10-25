@@ -19,6 +19,58 @@ bool hasVirtualIndices(const std::vector<Index>& indices) {
     return false;
 }
 
+struct VirtualIndexCollector {
+    // map name -> set of offsets used with that name
+    std::map<std::string, std::set<int>> indicesByName;
+
+    void visit(const Expr& expr) {
+        std::visit([this](const auto& n) { (*this)(n); }, expr.node);
+    }
+
+    void operator()(const ExprTensorRef& ref) {
+        for (const auto& idx: ref.ref.indices) {
+            if (auto* vid = std::get_if<VirtualIndex>(&idx.value)) {
+                indicesByName[vid->name.name].insert(vid->offset);
+            }
+        }
+    }
+
+    void operator()(const ExprNumber&) {}
+    void operator()(const ExprString&) {}
+
+    void operator()(const ExprList& lst) {
+        for (const auto& e: lst.elements) visit(*e);
+    }
+
+    void operator()(const ExprParen& p) { visit(*p.inner); }
+
+    void operator()(const ExprCall& c) {
+        for (const auto& arg: c.args) visit(*arg);
+    }
+
+    void operator()(const ExprBinary& b) {
+        visit(*b.lhs);
+        visit(*b.rhs);
+    }
+
+    void operator()(const ExprUnary& u) {
+        visit(*u.operand);
+    }
+};
+
+    static std::map<std::string, std::set<int>> collectRhsVirtualIndices(const TensorEquation& eq) {
+        VirtualIndexCollector c;
+        for (const auto& cl : eq.clauses) {
+            c.visit(*cl.expr);
+            if (cl.guard) c.visit(**cl.guard);
+        }
+        return c.indicesByName;
+    }
+
+    static bool isAllDigits(const std::string& s) {
+        return !s.empty() && std::all_of(s.begin(), s.end(), [](const unsigned char ch) { return std::isdigit(ch); });
+    }
+
 // Visitor to find all identifiers used as regular indices in an expression
 struct IndexCollector {
     std::set<std::string> indices;
@@ -233,22 +285,25 @@ bool VirtualIndexPreprocessor::shouldPreprocess(const Statement& st, const Envir
         return true;
     }
 
-    // Check for virtual indices in RHS
-    for (const auto& clause : eq.clauses) {
-        VirtualIndexChecker checker;
-        checker.visit(*clause.expr);
-        if (checker.hasVirtual) {
-            return true;
-        }
-        if (clause.guard) {
-            checker.visit(**clause.guard);
-            if (checker.hasVirtual) {
-                return true;
-            }
-        }
-    }
+    const auto rhsV = collectRhsVirtualIndices(eq);
+    return !rhsV.empty();
 
-    return false;
+    // Check for virtual indices in RHS
+    // for (const auto& clause : eq.clauses) {
+    //     VirtualIndexChecker checker;
+    //     checker.visit(*clause.expr);
+    //     if (checker.hasVirtual) {
+    //         return true;
+    //     }
+    //     if (clause.guard) {
+    //         checker.visit(**clause.guard);
+    //         if (checker.hasVirtual) {
+    //             return true;
+    //         }
+    //     }
+    // }
+    //
+    // return false;
 }
 
 std::vector<Statement> VirtualIndexPreprocessor::preprocess(const Statement& st, Environment& env) {
@@ -263,56 +318,76 @@ std::vector<Statement> VirtualIndexPreprocessor::preprocess(const Statement& st,
     if (lhsVirtuals.empty()) {
         // No virtual indices in LHS - check if there are any in RHS
         // If so, we need to substitute them with their concrete values (not expand)
-        bool hasRhsVirtuals = false;
-        for (const auto& clause : eq.clauses) {
-            VirtualIndexChecker checker;
-            checker.visit(*clause.expr);
-            if (checker.hasVirtual) {
-                hasRhsVirtuals = true;
-                break;
-            }
-        }
+        auto rhsV = collectRhsVirtualIndices(eq);
+        if (rhsV.empty()) return {st};
 
-        if (hasRhsVirtuals) {
-            // Substitute RHS virtual indices with their concrete values
-            // Virtual index *N simply refers to the concrete value N
-            std::map<std::string, int> regularSubs; // Empty - no regular index substitution
-            std::map<std::pair<std::string, int>, int> virtualSubs;
+        std::map<std::string, int> regularSubs; // empty
+        std::map<std::pair<std::string, int>, int> virtualSubs;
 
-            // For virtual indices like *5, the parser creates VirtualIndex{name="5", offset=0}
-            // For virtual indices like *t+1, the parser creates VirtualIndex{name="t", offset=1}
-            // Build a mapping from all possible virtual index patterns to their concrete values
-
-            // Handle *N syntax (name=N as string, offset=0)
-            for (int n = 0; n <= 20; ++n) {
-                virtualSubs[{std::to_string(n), 0}] = n;
-            }
-
-            // FIXME: We need to use the actual index names; not a list of common names and guess!
-            // Handle *name+offset syntax (e.g., *t+1, *t-1)
-            for (int offset = -10; offset <= 10; ++offset) {
-                virtualSubs[{"t", offset}] = offset;
-                // Add common names
-                virtualSubs[{"i", offset}] = offset;
-                virtualSubs[{"j", offset}] = offset;
-                virtualSubs[{"k", offset}] = offset;
-                virtualSubs[{"n", offset}] = offset;
-            }
-
-            TensorEquation concreteEq = eq;
-            for (size_t clauseIdx = 0; clauseIdx < concreteEq.clauses.size(); ++clauseIdx) {
-                concreteEq.clauses[clauseIdx].expr =
-                    substituteIndicesInExpr(eq.clauses[clauseIdx].expr, regularSubs, virtualSubs);
-                if (eq.clauses[clauseIdx].guard) {
-                    concreteEq.clauses[clauseIdx].guard =
-                        substituteIndicesInExpr(*eq.clauses[clauseIdx].guard, regularSubs, virtualSubs);
+        for (auto& [name, offsets] : rhsV) {
+            for (int off : offsets) {
+                // Only allow numeric *N (offset must be zero)
+                if (isAllDigits(name) && off == 0) {
+                    virtualSubs[{name, 0}] = std::stoi(name);
+                } else {
+                    throw std::runtime_error(
+                        "RHS contains non-numeric virtual index '*" + name +
+                        (off >= 0 ? "+" + std::to_string(off) : std::to_string(off)) +
+                        "' without a driving LHS virtual index");
                 }
             }
-
-            return {concreteEq};
         }
 
-        return {st}; // No virtual indices at all, pass through
+        // bool hasRhsVirtuals = false;
+        // for (const auto& clause : eq.clauses) {
+        //     VirtualIndexChecker checker;
+        //     checker.visit(*clause.expr);
+        //     if (checker.hasVirtual) {
+        //         hasRhsVirtuals = true;
+        //         break;
+        //     }
+        // }
+        //
+        // if (hasRhsVirtuals) {
+        //     // Substitute RHS virtual indices with their concrete values
+        //     // Virtual index *N simply refers to the concrete value N
+        //     std::map<std::string, int> regularSubs; // Empty - no regular index substitution
+        //     std::map<std::pair<std::string, int>, int> virtualSubs;
+        //
+        //     // For virtual indices like *5, the parser creates VirtualIndex{name="5", offset=0}
+        //     // For virtual indices like *t+1, the parser creates VirtualIndex{name="t", offset=1}
+        //     // Build a mapping from all possible virtual index patterns to their concrete values
+        //
+        //     // Handle *N syntax (name=N as string, offset=0)
+        //     for (int n = 0; n <= 20; ++n) {
+        //         virtualSubs[{std::to_string(n), 0}] = n;
+        //     }
+        //
+        //     // FIXME: We need to use the actual index names; not a list of common names and guess!
+        //     // Handle *name+offset syntax (e.g., *t+1, *t-1)
+        //     for (int offset = -10; offset <= 10; ++offset) {
+        //         virtualSubs[{"t", offset}] = offset;
+        //         // Add common names
+        //         virtualSubs[{"i", offset}] = offset;
+        //         virtualSubs[{"j", offset}] = offset;
+        //         virtualSubs[{"k", offset}] = offset;
+        //         virtualSubs[{"n", offset}] = offset;
+        //     }
+        //
+        //     TensorEquation concreteEq = eq;
+        //     for (size_t clauseIdx = 0; clauseIdx < concreteEq.clauses.size(); ++clauseIdx) {
+        //         concreteEq.clauses[clauseIdx].expr =
+        //             substituteIndicesInExpr(eq.clauses[clauseIdx].expr, regularSubs, virtualSubs);
+        //         if (eq.clauses[clauseIdx].guard) {
+        //             concreteEq.clauses[clauseIdx].guard =
+        //                 substituteIndicesInExpr(*eq.clauses[clauseIdx].guard, regularSubs, virtualSubs);
+        //         }
+        //     }
+        //
+        //     return {concreteEq};
+        // }
+
+        // return {st}; // No virtual indices at all, pass through
     }
 
     // For now, we only support single virtual index on LHS
@@ -341,31 +416,69 @@ std::vector<Statement> VirtualIndexPreprocessor::preprocess(const Statement& st,
     // Step 5: Expand into concrete statements
     std::vector<Statement> result;
 
+    auto rhsV = collectRhsVirtualIndices(eq);
+
     for (int i = 0; i < iterationCount; ++i) {
-        // Create substitution maps
-        std::map<std::string, int> regularSubs;
-        regularSubs[virtualIndexName] = i;
-
+        std::map<std::string, int> regularSubs {{ virtualIndexName, i }};
         std::map<std::pair<std::string, int>, int> virtualSubs;
-        // Add mappings for common offsets
-        for (int offset = -10; offset <= 10; ++offset) {
-            virtualSubs[{virtualIndexName, offset}] = i + offset;
-        }
 
-        // Substitute indices in equation
-        TensorEquation concreteEq = eq;
-        concreteEq.lhs = substituteIndices(eq.lhs, regularSubs, virtualSubs);
-
-        for (size_t clauseIdx = 0; clauseIdx < concreteEq.clauses.size(); ++clauseIdx) {
-            concreteEq.clauses[clauseIdx].expr =
-                substituteIndicesInExpr(eq.clauses[clauseIdx].expr, regularSubs, virtualSubs);
-            if (eq.clauses[clauseIdx].guard) {
-                concreteEq.clauses[clauseIdx].guard =
-                    substituteIndicesInExpr(*eq.clauses[clauseIdx].guard, regularSubs, virtualSubs);
+        // Only create substitutions for the offsets that are actually used
+        if (auto it = rhsV.find(virtualIndexName); it != rhsV.end()) {
+            for (int off : it->second) {
+                virtualSubs[{virtualIndexName, off}] = i + off;
             }
         }
 
+        // Optional: also substitute numeric *N on RHS if present
+        for (auto& [name, offs] : rhsV) {
+            if (name == virtualIndexName) continue;
+            for (int off : offs) {
+                if (isAllDigits(name) && off == 0) {
+                    virtualSubs[{name, 0}] = std::stoi(name);
+                } else {
+                    // If other virtual-index names appear on RHS, decide policy:
+                    // either forbid or support if their base also appears as a regular index with a known value.
+                    // For now, forbid to keep semantics clear:
+                    throw std::runtime_error(
+                        "RHS contains unrelated virtual index '*" + name +
+                        (off >= 0 ? "+" + std::to_string(off) : std::to_string(off)) + "'");
+                }
+            }
+        }
+
+        TensorEquation concreteEq = eq;
+        concreteEq.lhs = substituteIndices(eq.lhs, regularSubs, virtualSubs);
+        for (size_t clauseIdx = 0; clauseIdx < concreteEq.clauses.size(); ++clauseIdx) {
+            concreteEq.clauses[clauseIdx].expr = substituteIndicesInExpr(eq.clauses[clauseIdx].expr, regularSubs, virtualSubs);
+            if (eq.clauses[clauseIdx].guard) {
+                concreteEq.clauses[clauseIdx].guard = substituteIndicesInExpr(*eq.clauses[clauseIdx].guard, regularSubs, virtualSubs);
+            }
+        }
         result.push_back(concreteEq);
+        // // Create substitution maps
+        // std::map<std::string, int> regularSubs;
+        // regularSubs[virtualIndexName] = i;
+        //
+        // std::map<std::pair<std::string, int>, int> virtualSubs;
+        // // Add mappings for common offsets
+        // for (int offset = -10; offset <= 10; ++offset) {
+        //     virtualSubs[{virtualIndexName, offset}] = i + offset;
+        // }
+        //
+        // // Substitute indices in equation
+        // TensorEquation concreteEq = eq;
+        // concreteEq.lhs = substituteIndices(eq.lhs, regularSubs, virtualSubs);
+        //
+        // for (size_t clauseIdx = 0; clauseIdx < concreteEq.clauses.size(); ++clauseIdx) {
+        //     concreteEq.clauses[clauseIdx].expr =
+        //         substituteIndicesInExpr(eq.clauses[clauseIdx].expr, regularSubs, virtualSubs);
+        //     if (eq.clauses[clauseIdx].guard) {
+        //         concreteEq.clauses[clauseIdx].guard =
+        //             substituteIndicesInExpr(*eq.clauses[clauseIdx].guard, regularSubs, virtualSubs);
+        //     }
+        // }
+        //
+        // result.push_back(concreteEq);
     }
 
     return result;
