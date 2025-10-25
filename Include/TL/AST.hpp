@@ -50,15 +50,25 @@ struct ExprList { std::vector<ExprPtr> elements; };
 struct ExprParen { ExprPtr inner; };
 struct ExprCall { Identifier func; std::vector<ExprPtr> args; };
 struct ExprBinary {
-    enum class Op { Add, Sub, Mul, Div };
+    enum class Op {
+        Add, Sub, Mul, Div, Mod,  // Arithmetic operators
+        Lt, Le, Gt, Ge, Eq, Ne,  // Comparison operators: <, <=, >, >=, ==, !=
+        And, Or                   // Logical operators
+    };
     Op op{Op::Add};
     ExprPtr lhs;
     ExprPtr rhs;
 };
 
+struct ExprUnary {
+    enum class Op { Neg, Not };  // Unary minus and logical not
+    Op op;
+    ExprPtr operand;
+};
+
 struct Expr {
     SourceLocation loc{};
-    std::variant<ExprTensorRef, ExprNumber, ExprString, ExprList, ExprParen, ExprCall, ExprBinary> node;
+    std::variant<ExprTensorRef, ExprNumber, ExprString, ExprList, ExprParen, ExprCall, ExprBinary, ExprUnary> node;
 };
 
 // Datalog structures
@@ -69,11 +79,18 @@ struct DatalogAtom {
     SourceLocation loc{};
 };
 
+// Guarded clause: expression with optional guard condition
+struct GuardedClause {
+    ExprPtr expr;                  // The expression to evaluate
+    std::optional<ExprPtr> guard;  // Optional guard condition (if present, acts as mask)
+    SourceLocation loc{};
+};
+
 // Statements
 struct TensorEquation {
     TensorRef lhs;           // A[i] or scalar A
     std::string projection;  // currently just "="; keep as text for future (+=, max=, ...)
-    ExprPtr rhs;
+    std::vector<GuardedClause> clauses;  // Multiple guarded clauses (all contribute additively)
     SourceLocation loc{};
 };
 

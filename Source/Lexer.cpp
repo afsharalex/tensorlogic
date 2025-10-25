@@ -51,6 +51,10 @@ namespace tl::lex {
     struct dot    : pegtl::one<'.'> {};
     struct slash  : pegtl::one<'/'> {};
     struct star   : pegtl::one<'*'> {};
+    struct colon  : pegtl::one<':'> {};
+    struct pipe   : pegtl::one<'|'> {};
+    struct percent : pegtl::one<'%'> {};
+    struct caret  : pegtl::one<'^'> {};
     struct larrow : pegtl::string<'<','-'> {};
 
     // Comparison operators
@@ -73,6 +77,7 @@ namespace tl::lex {
                 identifier,
                 larrow, ge, le, eqeq, noteq, gt, lt,
                 lbrack, rbrack, lparen, rparen, comma, equals, qmark, plus, minus, dot, slash, star,
+                colon, pipe, percent, caret,
                 unknown_char
             > {};
 
@@ -119,11 +124,21 @@ namespace tl::lex {
         }
     };
 
-    // identifier
+    // identifier (with keyword detection)
     template<> struct action< identifier > {
         template< typename Input >
         static void apply(const Input& in, TokenSink& sink) {
-            Token t; t.type = Token::Identifier; t.text = in.string(); t.loc = locFrom(in.position());
+            Token t; t.text = in.string(); t.loc = locFrom(in.position());
+            // Check for keywords
+            if (t.text == "and") {
+                t.type = Token::KwAnd;
+            } else if (t.text == "or") {
+                t.type = Token::KwOr;
+            } else if (t.text == "not") {
+                t.type = Token::KwNot;
+            } else {
+                t.type = Token::Identifier;
+            }
             sink.out.push_back(std::move(t));
         }
     };
@@ -168,6 +183,10 @@ namespace tl::lex {
     DEFINE_CHAR_TOKEN(dot,    Token::Dot,    '.')
     DEFINE_CHAR_TOKEN(slash,  Token::Slash,  '/')
     DEFINE_CHAR_TOKEN(star,   Token::Star,   '*')
+    DEFINE_CHAR_TOKEN(colon,  Token::Colon,  ':')
+    DEFINE_CHAR_TOKEN(pipe,   Token::Pipe,   '|')
+    DEFINE_CHAR_TOKEN(percent, Token::Percent, '%')
+    DEFINE_CHAR_TOKEN(caret,  Token::Caret,  '^')
 
     // multi-char '<-'
     template<> struct action< larrow > {

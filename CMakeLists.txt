@@ -36,6 +36,7 @@ add_executable(tl
     Source/Runtime/Executors/ReductionExecutor.cpp
     Source/Runtime/Executors/IdentityExecutor.cpp
     Source/Runtime/Executors/PoolingExecutor.cpp
+    Source/Runtime/Executors/GuardedClauseExecutor.cpp
     Source/Runtime/Executors/ExpressionExecutor.cpp
 )
 
@@ -80,6 +81,7 @@ add_executable(tl_tests
     Source/Runtime/Executors/ReductionExecutor.cpp
     Source/Runtime/Executors/IdentityExecutor.cpp
     Source/Runtime/Executors/PoolingExecutor.cpp
+    Source/Runtime/Executors/GuardedClauseExecutor.cpp
     Source/Runtime/Executors/ExpressionExecutor.cpp
 )
 

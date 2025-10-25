@@ -15,6 +15,8 @@ namespace tl::lex {
             Plus, Minus, Dot, Slash, Star,
             Greater, Less, Ge, Le, EqEq, NotEq,
             LArrow, // '<-' for Datalog rules
+            Colon, Pipe, Percent, Caret,  // New tokens for guards and operators
+            KwAnd, KwOr, KwNot,  // Keywords for logical operators
             End, Newline, Unknown
         } type{End};
         std::string text;

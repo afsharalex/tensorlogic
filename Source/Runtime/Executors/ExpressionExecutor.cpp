@@ -11,8 +11,13 @@ namespace tl {
             return false;
         }
 
+        // Only handle single-clause, no-guard equations
+        if (eq.clauses.size() != 1 || eq.clauses[0].guard.has_value()) {
+            return false;
+        }
+
         // Must have an RHS expression
-        if (!eq.rhs) return false;
+        if (!eq.clauses[0].expr) return false;
 
         // This is a catch-all executor, so it can handle any expression
         // More specific executors should have run before this one
@@ -21,12 +26,12 @@ namespace tl {
 
     Tensor ExpressionExecutor::execute(const TensorEquation &eq, Environment &env, TensorBackend &backend) {
         // Evaluate the RHS expression
-        Tensor val = evalExpr(eq.rhs, eq.lhs, env, backend);
+        Tensor val = evalExpr(eq.clauses[0].expr, eq.lhs, env, backend);
 
         // Element-wise assignment with label creation: only for simple numeric literals
         // Example: W[Alice] = 1.0, W[0] = 2.0
         std::vector<int64_t> idxs_assign;
-        auto parsed_literal = executor_utils::tryParseNumericLiteral(eq.rhs);
+        auto parsed_literal = executor_utils::tryParseNumericLiteral(eq.clauses[0].expr);
 
         if (!eq.lhs.indices.empty() && parsed_literal.has_value()) {
             // RHS is a simple numeric literal, so we can do element-wise assignment
@@ -87,6 +92,45 @@ namespace tl {
 
         // Handle tensor references
         if (const auto* tr = std::get_if<ExprTensorRef>(&e.node)) {
+            // Check if indices are bound variables (for guarded clause evaluation)
+            bool hasBounden = false;
+            for (const auto& idx : tr->ref.indices) {
+                if (const auto* id = std::get_if<Identifier>(&idx.value)) {
+                    if (env.has(id->name)) {
+                        hasBounden = true;
+                        break;
+                    }
+                }
+            }
+
+            if (hasBounden) {
+                // Resolve indices using bound values from environment
+                Tensor base = env.lookup(tr->ref.name.name);
+                if (tr->ref.indices.empty()) return base;
+
+                std::vector<torch::indexing::TensorIndex> indices;
+                for (const auto& idx : tr->ref.indices) {
+                    if (const auto* num = std::get_if<NumberLiteral>(&idx.value)) {
+                        long long v = 0;
+                        try { v = std::stoll(num->text); } catch (...) { v = 0; }
+                        indices.emplace_back(static_cast<int64_t>(v));
+                    } else if (const auto* id = std::get_if<Identifier>(&idx.value)) {
+                        // Check if bound in environment
+                        if (env.has(id->name)) {
+                            Tensor idxTensor = env.lookup(id->name);
+                            // Convert to integer index
+                            int64_t idxValue = static_cast<int64_t>(idxTensor.item<float>());
+                            indices.emplace_back(idxValue);
+                        } else {
+                            // Not bound, use as slice
+                            indices.emplace_back(torch::indexing::Slice());
+                        }
+                    }
+                }
+                return base.index(indices);
+            }
+
+            // Normal case: use valueForRef
             return executor_utils::valueForRef(tr->ref, env);
         }
 
@@ -200,11 +244,25 @@ namespace tl {
             using Op = ExprBinary::Op;
 
             // For multiplication, try to lower to einsum first
+            // But skip if index variables are bound (for guarded clause evaluation)
             if (bin->op == Op::Mul) {
-                std::string spec;
-                std::vector<Tensor> inputs;
-                if (executor_utils::tryLowerIndexedProductToEinsum(lhsCtx, ep, spec, inputs, env)) {
-                    return backend.einsum(spec, inputs);
+                // Check if any index variables in lhsCtx are bound
+                bool hasBoundIndices = false;
+                for (const auto& idx : lhsCtx.indices) {
+                    if (const auto* id = std::get_if<Identifier>(&idx.value)) {
+                        if (env.has(id->name)) {
+                            hasBoundIndices = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!hasBoundIndices) {
+                    std::string spec;
+                    std::vector<Tensor> inputs;
+                    if (executor_utils::tryLowerIndexedProductToEinsum(lhsCtx, ep, spec, inputs, env)) {
+                        return backend.einsum(spec, inputs);
+                    }
                 }
             }
 
@@ -220,9 +278,46 @@ namespace tl {
                     return a - b;
                 case Op::Div:
                     return a / b;
+                case Op::Mod:
+                    return torch::fmod(a, b);
                 case Op::Mul:
-                default:
                     return a * b;
+                case Op::Lt:
+                    return torch::lt(a, b).to(torch::kFloat32);
+                case Op::Le:
+                    return torch::le(a, b).to(torch::kFloat32);
+                case Op::Gt:
+                    return torch::gt(a, b).to(torch::kFloat32);
+                case Op::Ge:
+                    return torch::ge(a, b).to(torch::kFloat32);
+                case Op::Eq:
+                    return torch::eq(a, b).to(torch::kFloat32);
+                case Op::Ne:
+                    return torch::ne(a, b).to(torch::kFloat32);
+                case Op::And:
+                    // Logical AND: both must be non-zero
+                    return torch::logical_and(torch::ne(a, 0), torch::ne(b, 0)).to(torch::kFloat32);
+                case Op::Or:
+                    // Logical OR: at least one must be non-zero
+                    return torch::logical_or(torch::ne(a, 0), torch::ne(b, 0)).to(torch::kFloat32);
+                default:
+                    throw ExecutionError("Unknown binary operator");
+            }
+        }
+
+        // Handle unary operations
+        if (const auto* un = std::get_if<ExprUnary>(&e.node)) {
+            using Op = ExprUnary::Op;
+            Tensor operand = evalExpr(un->operand, lhsCtx, env, backend);
+
+            switch (un->op) {
+                case Op::Neg:
+                    return -operand;
+                case Op::Not:
+                    // Logical NOT: zero if non-zero, one if zero
+                    return torch::eq(operand, 0).to(torch::kFloat32);
+                default:
+                    throw ExecutionError("Unknown unary operator");
             }
         }
 

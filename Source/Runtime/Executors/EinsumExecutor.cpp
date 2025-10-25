@@ -11,20 +11,25 @@ namespace tl {
             return false;
         }
 
-        if (!eq.rhs) return false;
+        // Only handle single-clause, no-guard equations
+        if (eq.clauses.size() != 1 || eq.clauses[0].guard.has_value()) {
+            return false;
+        }
+
+        if (!eq.clauses[0].expr) return false;
 
         std::string spec;
         std::vector<Tensor> inputs;
 
         // Check if it's an explicit einsum call
-        return executor_utils::tryParseEinsumCall(eq.rhs, spec, inputs, env);
+        return executor_utils::tryParseEinsumCall(eq.clauses[0].expr, spec, inputs, env);
     }
 
     Tensor EinsumExecutor::execute(const TensorEquation &eq, Environment &env, TensorBackend &backend) {
         std::string spec;
         std::vector<Tensor> inputs;
 
-        if (!executor_utils::tryParseEinsumCall(eq.rhs, spec, inputs, env)) {
+        if (!executor_utils::tryParseEinsumCall(eq.clauses[0].expr, spec, inputs, env)) {
             throw ExecutionError("Einsum executor: failed to parse einsum call");
         }
 

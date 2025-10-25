@@ -25,9 +25,9 @@ namespace tl {
         std::string name() const override;
         int priority() const override;
 
-    private:
         /**
          * @brief Recursively evaluate an expression
+         * Made public so other executors can reuse expression evaluation logic
          */
         Tensor evalExpr(const ExprPtr& ep, const TensorRef& lhsCtx,
                        Environment& env, TensorBackend& backend) const;

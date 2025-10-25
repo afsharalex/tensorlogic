@@ -10,11 +10,16 @@ namespace tl {
             return false;
         }
 
+        // Only handle single-clause, no-guard equations
+        if (eq.clauses.size() != 1 || eq.clauses[0].guard.has_value()) {
+            return false;
+        }
+
         // Check if LHS has no indices (scalar) and RHS is a tensor ref with indices
         if (!eq.lhs.indices.empty()) return false;
-        if (!eq.rhs) return false;
+        if (!eq.clauses[0].expr) return false;
 
-        const Expr &e = *eq.rhs;
+        const Expr &e = *eq.clauses[0].expr;
         const auto *eref = std::get_if<ExprTensorRef>(&e.node);
         if (!eref) return false;
 
@@ -23,7 +28,7 @@ namespace tl {
     }
 
     Tensor ReductionExecutor::execute(const TensorEquation &eq, Environment &env, TensorBackend &backend) {
-        const Expr &e = *eq.rhs;
+        const Expr &e = *eq.clauses[0].expr;
         const auto *eref = std::get_if<ExprTensorRef>(&e.node);
         if (!eref) {
             throw ExecutionError("ReductionExecutor: expected tensor ref on RHS");

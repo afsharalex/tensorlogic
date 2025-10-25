@@ -11,21 +11,26 @@ namespace tl {
             return false;
         }
 
-        // Check if RHS is a list literal and LHS has no indices (bare identifier)
-        if (!eq.rhs || !eq.lhs.indices.empty()) {
+        // Only handle single-clause, no-guard equations
+        if (eq.clauses.size() != 1 || eq.clauses[0].guard.has_value()) {
             return false;
         }
 
-        const Expr &e = *eq.rhs;
+        // Check if RHS is a list literal and LHS has no indices (bare identifier)
+        if (!eq.clauses[0].expr || !eq.lhs.indices.empty()) {
+            return false;
+        }
+
+        const Expr &e = *eq.clauses[0].expr;
         return std::holds_alternative<ExprList>(e.node);
     }
 
     Tensor ListLiteralExecutor::execute(const TensorEquation &eq, Environment &env, TensorBackend &backend) {
-        if (!eq.rhs) {
+        if (!eq.clauses[0].expr) {
             throw ExecutionError("List literal executor: null RHS");
         }
 
-        const Expr &e = *eq.rhs;
+        const Expr &e = *eq.clauses[0].expr;
         const auto *lst = std::get_if<ExprList>(&e.node);
         if (!lst) {
             throw ExecutionError("List literal executor: expected list literal");

@@ -54,8 +54,24 @@ std::string toString(const Expr& e) {
                 case ExprBinary::Op::Sub: return toString(*b.lhs) + "-" + toString(*b.rhs);
                 case ExprBinary::Op::Mul: return toString(*b.lhs) + toString(*b.rhs); // implicit multiplication
                 case ExprBinary::Op::Div: return toString(*b.lhs) + "/" + toString(*b.rhs);
+                case ExprBinary::Op::Mod: return toString(*b.lhs) + "%" + toString(*b.rhs);
+                case ExprBinary::Op::Lt: return toString(*b.lhs) + "<" + toString(*b.rhs);
+                case ExprBinary::Op::Le: return toString(*b.lhs) + "<=" + toString(*b.rhs);
+                case ExprBinary::Op::Gt: return toString(*b.lhs) + ">" + toString(*b.rhs);
+                case ExprBinary::Op::Ge: return toString(*b.lhs) + ">=" + toString(*b.rhs);
+                case ExprBinary::Op::Eq: return toString(*b.lhs) + "==" + toString(*b.rhs);
+                case ExprBinary::Op::Ne: return toString(*b.lhs) + "!=" + toString(*b.rhs);
+                case ExprBinary::Op::And: return toString(*b.lhs) + " and " + toString(*b.rhs);
+                case ExprBinary::Op::Or: return toString(*b.lhs) + " or " + toString(*b.rhs);
             }
             return toString(*b.lhs) + toString(*b.rhs);
+        }
+        std::string operator()(const ExprUnary& u) const {
+            switch (u.op) {
+                case ExprUnary::Op::Neg: return "-" + toString(*u.operand);
+                case ExprUnary::Op::Not: return "not " + toString(*u.operand);
+            }
+            return toString(*u.operand);
         }
     } v;
     return std::visit(v, e.node);
@@ -79,7 +95,15 @@ static std::string datalogAtomToString(const DatalogAtom& a) {
 std::string toString(const Statement& st) {
     struct V2 {
         std::string operator()(const TensorEquation& eq) const {
-            std::ostringstream oss; oss << toString(eq.lhs) << " " << eq.projection << " " << toString(*eq.rhs);
+            std::ostringstream oss;
+            oss << toString(eq.lhs) << " " << eq.projection << " ";
+            for (size_t i = 0; i < eq.clauses.size(); ++i) {
+                if (i) oss << " | ";
+                oss << toString(*eq.clauses[i].expr);
+                if (eq.clauses[i].guard) {
+                    oss << " : " << toString(**eq.clauses[i].guard);
+                }
+            }
             return oss.str();
         }
         std::string operator()(const FileOperation& fo) const {
