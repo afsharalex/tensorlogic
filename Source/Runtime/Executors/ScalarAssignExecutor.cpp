@@ -11,8 +11,13 @@ namespace tl {
             return false;
         }
 
+        // Only handle single-clause, no-guard equations
+        if (eq.clauses.size() != 1 || eq.clauses[0].guard.has_value()) {
+            return false;
+        }
+
         // Check if RHS is a numeric literal
-        auto numeric_value = executor_utils::tryParseNumericLiteral(eq.rhs);
+        auto numeric_value = executor_utils::tryParseNumericLiteral(eq.clauses[0].expr);
         if (!numeric_value) {
             return false;
         }
@@ -29,7 +34,7 @@ namespace tl {
 
     Tensor ScalarAssignExecutor::execute(const TensorEquation &eq, Environment &env, TensorBackend &backend) {
         // Parse numeric value
-        auto numeric_value = executor_utils::tryParseNumericLiteral(eq.rhs);
+        auto numeric_value = executor_utils::tryParseNumericLiteral(eq.clauses[0].expr);
         if (!numeric_value) {
             throw ExecutionError("Expected numeric literal in RHS");
         }

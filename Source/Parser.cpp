@@ -235,7 +235,7 @@ private:
         // return {};
     }
 
-    // term := primary { (('*' | '/') primary) | primary }  // support explicit division and implicit multiplication
+    // term := primary { (('*' | '/' | '%') primary) | primary }  // support explicit division, modulo, and implicit multiplication
     ExprPtr parseTerm() {
         auto lhs = parsePrimary();
         auto startsPrimary = [&](Token::Type t)->bool {
@@ -262,6 +262,16 @@ private:
                 lhs = e;
                 continue;
             }
+            if (tok_.type == Token::Percent) {
+                advance();
+                auto rhs = parsePrimary();
+                auto e = std::make_shared<Expr>();
+                e->loc = lhs->loc;
+                ExprBinary bin; bin.op = ExprBinary::Op::Mod; bin.lhs = lhs; bin.rhs = rhs;
+                e->node = std::move(bin);
+                lhs = e;
+                continue;
+            }
             if (startsPrimary(tok_.type)) {
                 auto rhs = parsePrimary();
                 auto e = std::make_shared<Expr>();
@@ -274,6 +284,110 @@ private:
             break;
         }
         return lhs;
+    }
+
+    // Guard condition parsing for guarded clauses
+    // parseGuardComparison: handles comparisons of arithmetic expressions
+    ExprPtr parseGuardComparison() {
+        auto lhs = parseExpr();
+        // Check for comparison operators
+        if (tok_.type == Token::Less || tok_.type == Token::Le ||
+            tok_.type == Token::Greater || tok_.type == Token::Ge ||
+            tok_.type == Token::EqEq || tok_.type == Token::NotEq) {
+            Token::Type opType = tok_.type;
+            advance();
+            auto rhs = parseExpr();
+            auto e = std::make_shared<Expr>();
+            e->loc = lhs->loc;
+            ExprBinary bin;
+            switch (opType) {
+                case Token::Less: bin.op = ExprBinary::Op::Lt; break;
+                case Token::Le: bin.op = ExprBinary::Op::Le; break;
+                case Token::Greater: bin.op = ExprBinary::Op::Gt; break;
+                case Token::Ge: bin.op = ExprBinary::Op::Ge; break;
+                case Token::EqEq: bin.op = ExprBinary::Op::Eq; break;
+                case Token::NotEq: bin.op = ExprBinary::Op::Ne; break;
+                default: errorHere("internal error: unexpected comparison operator");
+            }
+            bin.lhs = lhs;
+            bin.rhs = rhs;
+            e->node = std::move(bin);
+            return e;
+        }
+        // If no comparison operator, return the expression as-is (for boolean values)
+        return lhs;
+    }
+
+    // parseGuardNotFactor: handles 'not' prefix operator and parenthesized conditions
+    ExprPtr parseGuardNotFactor() {
+        if (tok_.type == Token::KwNot) {
+            SourceLocation loc = tok_.loc;
+            advance();
+            auto operand = parseGuardNotFactor();
+            auto e = std::make_shared<Expr>();
+            e->loc = loc;
+            ExprUnary un;
+            un.op = ExprUnary::Op::Not;
+            un.operand = operand;
+            e->node = std::move(un);
+            return e;
+        }
+        if (tok_.type == Token::LParen) {
+            advance();
+            auto inner = parseGuardCondition();
+            expect(Token::RParen, ")");
+            return inner;
+        }
+        return parseGuardComparison();
+    }
+
+    // parseGuardAndTerm: handles 'and' operator
+    ExprPtr parseGuardAndTerm() {
+        auto lhs = parseGuardNotFactor();
+        while (tok_.type == Token::KwAnd) {
+            advance();
+            auto rhs = parseGuardNotFactor();
+            auto e = std::make_shared<Expr>();
+            e->loc = lhs->loc;
+            ExprBinary bin;
+            bin.op = ExprBinary::Op::And;
+            bin.lhs = lhs;
+            bin.rhs = rhs;
+            e->node = std::move(bin);
+            lhs = e;
+        }
+        return lhs;
+    }
+
+    // parseGuardCondition: handles 'or' operator (lowest precedence)
+    ExprPtr parseGuardCondition() {
+        auto lhs = parseGuardAndTerm();
+        while (tok_.type == Token::KwOr) {
+            advance();
+            auto rhs = parseGuardAndTerm();
+            auto e = std::make_shared<Expr>();
+            e->loc = lhs->loc;
+            ExprBinary bin;
+            bin.op = ExprBinary::Op::Or;
+            bin.lhs = lhs;
+            bin.rhs = rhs;
+            e->node = std::move(bin);
+            lhs = e;
+        }
+        return lhs;
+    }
+
+    // parseGuardedClause: parses expression [: guard_condition]
+    GuardedClause parseGuardedClause() {
+        skipNewlines();
+        GuardedClause clause;
+        clause.expr = parseExpr();
+        clause.loc = clause.expr->loc;
+        if (accept(Token::Colon)) {
+            skipNewlines();
+            clause.guard = parseGuardCondition();
+        }
+        return clause;
     }
 
     // Datalog parsing
@@ -459,7 +573,14 @@ private:
                     FileOperation fo; fo.lhsIsTensor = true; fo.tensor = tr; fo.file = s; fo.loc = s.loc;
                     return fo;
                 }
-                TensorEquation eq; eq.lhs = tr; eq.projection = proj; eq.rhs = parseExpr(); eq.loc = tr.loc;
+                // Parse guarded clauses separated by '|'
+                TensorEquation eq; eq.lhs = tr; eq.projection = proj; eq.loc = tr.loc;
+                eq.clauses.push_back(parseGuardedClause());
+                skipNewlines(); // Allow newlines before '|'
+                while (accept(Token::Pipe)) {
+                    eq.clauses.push_back(parseGuardedClause());
+                    skipNewlines(); // Allow newlines before next '|'
+                }
                 return eq;
             } catch (const ParseError&) {
                 // If failed, restore token best-effort (no backtracking of token stream provided)
@@ -483,7 +604,14 @@ private:
             FileOperation fo; fo.lhsIsTensor = true; fo.tensor = lhs; fo.file = s; fo.loc = s.loc;
             return fo;
         }
-        TensorEquation eq; eq.lhs = lhs; eq.projection = proj; eq.rhs = parseExpr(); eq.loc = lhs.loc;
+        // Parse guarded clauses separated by '|'
+        TensorEquation eq; eq.lhs = lhs; eq.projection = proj; eq.loc = lhs.loc;
+        eq.clauses.push_back(parseGuardedClause());
+        skipNewlines(); // Allow newlines before '|'
+        while (accept(Token::Pipe)) {
+            eq.clauses.push_back(parseGuardedClause());
+            skipNewlines(); // Allow newlines before next '|'
+        }
         return eq;
     }
 

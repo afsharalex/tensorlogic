@@ -36,6 +36,7 @@ add_executable(tl
     Source/Runtime/Executors/ReductionExecutor.cpp
     Source/Runtime/Executors/IdentityExecutor.cpp
     Source/Runtime/Executors/PoolingExecutor.cpp
+    Source/Runtime/Executors/GuardedClauseExecutor.cpp
     Source/Runtime/Executors/ExpressionExecutor.cpp
 )
 
@@ -55,16 +56,17 @@ set_target_properties(tl PROPERTIES
 
 # Test executable
 add_executable(tl_tests
-    # Existing tests
-    Tests/Unit/test_parse_statements.cpp
     Tests/Integration/test_examples.cpp
-    # New unit tests
+
+    Tests/Unit/test_parse_statements.cpp
     Tests/Unit/test_tensor_operations.cpp
     Tests/Unit/test_activations.cpp
     Tests/Unit/test_pooling.cpp
     Tests/Unit/test_datalog.cpp
     Tests/Unit/test_neurosymbolic.cpp
     Tests/Unit/test_executors.cpp
+    Tests/Unit/test_guarded_clauses.cpp
+
     # Source files needed for tests
     Source/Parser.cpp
     Source/Lexer.cpp
@@ -80,6 +82,7 @@ add_executable(tl_tests
     Source/Runtime/Executors/ReductionExecutor.cpp
     Source/Runtime/Executors/IdentityExecutor.cpp
     Source/Runtime/Executors/PoolingExecutor.cpp
+    Source/Runtime/Executors/GuardedClauseExecutor.cpp
     Source/Runtime/Executors/ExpressionExecutor.cpp
 )
 

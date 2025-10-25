@@ -4,6 +4,7 @@
 #include "TL/Runtime/Executors/EinsumExecutor.hpp"
 #include "TL/Runtime/Executors/IndexedProductExecutor.hpp"
 #include "TL/Runtime/Executors/ReductionExecutor.hpp"
+#include "TL/Runtime/Executors/GuardedClauseExecutor.hpp"
 #include "TL/Runtime/Executors/PoolingExecutor.hpp"
 #include "TL/Runtime/Executors/IdentityExecutor.hpp"
 #include "TL/Runtime/Executors/ExpressionExecutor.hpp"
@@ -132,6 +133,7 @@ void TensorLogicVM::initializeExecutors() {
   executor_registry_.registerExecutor(std::make_unique<EinsumExecutor>());             // 30
   executor_registry_.registerExecutor(std::make_unique<IndexedProductExecutor>());     // 35
   executor_registry_.registerExecutor(std::make_unique<ReductionExecutor>());          // 40
+  executor_registry_.registerExecutor(std::make_unique<GuardedClauseExecutor>());      // 50
   executor_registry_.registerExecutor(std::make_unique<PoolingExecutor>());            // 50
   executor_registry_.registerExecutor(std::make_unique<IdentityExecutor>());           // 80
   executor_registry_.registerExecutor(std::make_unique<ExpressionExecutor>());         // 90

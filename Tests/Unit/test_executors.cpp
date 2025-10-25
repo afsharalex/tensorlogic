@@ -12,6 +12,7 @@
 #include "TL/Runtime/Executors/IdentityExecutor.hpp"
 #include "TL/Runtime/Executors/ExpressionExecutor.hpp"
 #include "TL/backend.hpp"
+#include "TL/Runtime/Executors/GuardedClauseExecutor.hpp"
 
 using namespace tl;
 
@@ -721,6 +722,7 @@ TEST_CASE("Executor priority ordering", "[executor][priority]") {
     EinsumExecutor einsum;
     IndexedProductExecutor product;
     ReductionExecutor reduction;
+    GuardedClauseExecutor guarded_clause;
     PoolingExecutor pooling;
     IdentityExecutor identity;
     ExpressionExecutor expression;
@@ -730,6 +732,7 @@ TEST_CASE("Executor priority ordering", "[executor][priority]") {
     REQUIRE(einsum.priority() == 30);
     REQUIRE(product.priority() == 35);
     REQUIRE(reduction.priority() == 40);
+    REQUIRE(guarded_clause.priority() == 50);
     REQUIRE(pooling.priority() == 50);
     REQUIRE(identity.priority() == 80);
     REQUIRE(expression.priority() == 90);
@@ -742,6 +745,7 @@ TEST_CASE("Executor names", "[executor][metadata]") {
     EinsumExecutor einsum;
     IndexedProductExecutor product;
     ReductionExecutor reduction;
+    GuardedClauseExecutor guarded_clause;
     PoolingExecutor pooling;
     IdentityExecutor identity;
     ExpressionExecutor expression;
@@ -751,7 +755,69 @@ TEST_CASE("Executor names", "[executor][metadata]") {
     REQUIRE(einsum.name() == "EinsumExecutor");
     REQUIRE(product.name() == "IndexedProductExecutor");
     REQUIRE(reduction.name() == "ReductionExecutor");
+    REQUIRE(guarded_clause.name() == "GuardedClauseExecutor");
     REQUIRE(pooling.name() == "PoolingExecutor");
     REQUIRE(identity.name() == "IdentityExecutor");
     REQUIRE(expression.name() == "ExpressionExecutor");
 }
+
+// ============================================================================
+// GuardedClauseExecutor Tests
+// ============================================================================
+
+TEST_CASE("GuardedClauseExecutor::canExecute", "[executor][guarded]") {
+    GuardedClauseExecutor executor;
+    Environment env;
+
+    SECTION("Recognizes multi-clause guarded equation") {
+        auto eq = parseEquation("Y[i] = 2.0 * X[i] : (i % 2 == 0) | X[i]");
+        REQUIRE(executor.canExecute(eq, env));
+    }
+
+    SECTION("Recognizes single-clause with guard") {
+        auto eq = parseEquation("Y[i] = X[i] : (i < 5)");
+        REQUIRE(executor.canExecute(eq, env));
+    }
+
+    SECTION("Rejects single-clause without guard") {
+        auto eq = parseEquation("Y[i] = X[i]");
+        REQUIRE_FALSE(executor.canExecute(eq, env));
+    }
+
+    SECTION("Rejects non-standard projection (e.g., +=)") {
+        auto eq = parseEquation("Y[i] += X[i]");
+        REQUIRE_FALSE(executor.canExecute(eq, env));
+    }
+}
+
+TEST_CASE("GuardedClauseExecutor::execute", "[executor][guarded]") {
+    GuardedClauseExecutor executor;
+    Environment env;
+    auto backend = createBackend();
+
+    SECTION("Indexed LHS with per-index first-match-wins") {
+        env.bind("X", torch::tensor({10.0f, 20.0f, 30.0f, 40.0f, 50.0f}));
+        // Even indices doubled, odd indices unchanged
+        auto eq = parseEquation("Y[i] = 2.0 * X[i] : (i % 2 == 0) | 1.0 * X[i]");
+        Tensor result = executor.execute(eq, env, *backend);
+
+        REQUIRE(result.dim() == 1);
+        REQUIRE(result.size(0) == 5);
+        REQUIRE_THAT(result.index({0}).item<float>(), Catch::Matchers::WithinRel(20.0f, 0.001f));
+        REQUIRE_THAT(result.index({1}).item<float>(), Catch::Matchers::WithinRel(20.0f, 0.001f));
+        REQUIRE_THAT(result.index({2}).item<float>(), Catch::Matchers::WithinRel(60.0f, 0.001f));
+        REQUIRE_THAT(result.index({3}).item<float>(), Catch::Matchers::WithinRel(40.0f, 0.001f));
+        REQUIRE_THAT(result.index({4}).item<float>(), Catch::Matchers::WithinRel(100.0f, 0.001f));
+    }
+
+    SECTION("No indices on LHS - masked reduction to scalar") {
+        env.bind("X", torch::tensor({1.0f, 2.0f, 3.0f, 4.0f}));
+        // Keep only elements > 2.5 then sum (executor auto-reduces to scalar when LHS is scalar)
+        auto eq = parseEquation("total = X[i] : (X[i] > 2.5) | 0.0");
+        Tensor result = executor.execute(eq, env, *backend);
+
+        REQUIRE(result.dim() == 0);
+        REQUIRE_THAT(result.item<float>(), Catch::Matchers::WithinRel(7.0f, 0.001f)); // 3 + 4
+    }
+}
+

@@ -8,10 +8,15 @@ namespace tl {
         // Only handle standard assignment (=), not pooling operators (+=, max=, min=, avg=)
         if (!eq.projection.empty() && eq.projection != "=") return false;
 
-        // Check if RHS is a direct tensor reference (not einsum, not expression, just a ref)
-        if (!eq.rhs) return false;
+        // Only handle single-clause, no-guard equations
+        if (eq.clauses.size() != 1 || eq.clauses[0].guard.has_value()) {
+            return false;
+        }
 
-        const Expr &e = *eq.rhs;
+        // Check if RHS is a direct tensor reference (not einsum, not expression, just a ref)
+        if (!eq.clauses[0].expr) return false;
+
+        const Expr &e = *eq.clauses[0].expr;
         const auto *eref = std::get_if<ExprTensorRef>(&e.node);
         if (!eref) return false;
 
@@ -27,7 +32,7 @@ namespace tl {
     }
 
     Tensor IdentityExecutor::execute(const TensorEquation &eq, Environment &env, TensorBackend &backend) {
-        const Expr &e = *eq.rhs;
+        const Expr &e = *eq.clauses[0].expr;
         const auto *eref = std::get_if<ExprTensorRef>(&e.node);
         if (!eref) {
             throw ExecutionError("IdentityExecutor: expected tensor ref on RHS");

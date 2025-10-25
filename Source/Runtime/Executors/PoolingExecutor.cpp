@@ -13,9 +13,14 @@ namespace tl {
             return false;
         }
 
+        // Only handle single-clause, no-guard equations
+        if (eq.clauses.size() != 1 || eq.clauses[0].guard.has_value()) {
+            return false;
+        }
+
         // RHS must be a tensor reference
-        if (!eq.rhs) return false;
-        const Expr &e = *eq.rhs;
+        if (!eq.clauses[0].expr) return false;
+        const Expr &e = *eq.clauses[0].expr;
         const auto *eref = std::get_if<ExprTensorRef>(&e.node);
         if (!eref) return false;
 
@@ -25,7 +30,7 @@ namespace tl {
     }
 
     Tensor PoolingExecutor::execute(const TensorEquation &eq, Environment &env, TensorBackend &backend) {
-        const Expr &e = *eq.rhs;
+        const Expr &e = *eq.clauses[0].expr;
         const auto *eref = std::get_if<ExprTensorRef>(&e.node);
         if (!eref) {
             throw ExecutionError("PoolingExecutor: expected tensor ref on RHS");

@@ -11,21 +11,26 @@ namespace tl {
             return false;
         }
 
-        if (!eq.rhs) return false;
+        // Only handle single-clause, no-guard equations
+        if (eq.clauses.size() != 1 || eq.clauses[0].guard.has_value()) {
+            return false;
+        }
+
+        if (!eq.clauses[0].expr) return false;
 
         // Try to lower indexed product to einsum
         std::string spec;
         std::vector<Tensor> inputs;
         Environment& env_mut = const_cast<Environment&>(env); // Safe: tryLower doesn't modify for checking
 
-        return executor_utils::tryLowerIndexedProductToEinsum(eq.lhs, eq.rhs, spec, inputs, env_mut);
+        return executor_utils::tryLowerIndexedProductToEinsum(eq.lhs, eq.clauses[0].expr, spec, inputs, env_mut);
     }
 
     Tensor IndexedProductExecutor::execute(const TensorEquation &eq, Environment &env, TensorBackend &backend) {
         std::string spec;
         std::vector<Tensor> inputs;
 
-        if (!executor_utils::tryLowerIndexedProductToEinsum(eq.lhs, eq.rhs, spec, inputs, env)) {
+        if (!executor_utils::tryLowerIndexedProductToEinsum(eq.lhs, eq.clauses[0].expr, spec, inputs, env)) {
             throw ExecutionError("IndexedProductExecutor: failed to lower to einsum");
         }
 
