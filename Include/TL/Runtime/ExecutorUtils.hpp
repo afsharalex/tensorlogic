@@ -75,5 +75,15 @@ namespace tl {
                                            std::string& spec_out,
                                            std::vector<Tensor>& inputs_out,
                                            Environment& env);
+
+        /**
+         * @brief Unwrap ExprParen nodes to find an ExprTensorRef if present
+         *
+         * This helper traverses through parentheses to check if an expression
+         * is fundamentally a tensor reference, which is useful for pattern matching.
+         *
+         * @return Pointer to ExprTensorRef if found, nullptr otherwise
+         */
+        const ExprTensorRef* asExprTensorRef(const ExprPtr& expr);
     } // namespace executor_utils
 } // namespace tl

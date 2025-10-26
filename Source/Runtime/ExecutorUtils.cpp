@@ -201,7 +201,7 @@ namespace tl {
         }
 
         // Helper functions for tryLowerIndexedProductToEinsum
-        static const ExprTensorRef* asExprTensorRef(const ExprPtr& ep) {
+        const ExprTensorRef* asExprTensorRef(const ExprPtr& ep) {
             if (!ep) return nullptr;
             const Expr* e = ep.get();
             const Expr* cur = e;
@@ -319,6 +319,17 @@ namespace tl {
             const std::string b = mapSeq(rightNames);
             const std::string out = mapSeq(outNames);
             if (a.empty() || b.empty()) return false;
+
+            // IMPORTANT: Validate that all output indices appear in at least one input
+            // Without this check, we could generate invalid einsum specs like "b,b->a"
+            // where 'a' doesn't appear in any input operand
+            for (char c : out) {
+                if (a.find(c) == std::string::npos && b.find(c) == std::string::npos) {
+                    // Output index doesn't appear in any input - can't construct valid einsum
+                    return false;
+                }
+            }
+
             spec_out = a + "," + b + "->" + out;
 
             inputs_out.clear();
