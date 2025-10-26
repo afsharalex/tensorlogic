@@ -39,6 +39,9 @@ namespace tl {
 
         std::vector<Statement> preprocess(const Statement& st, Environment& env) override;
 
+        // Batch preprocessing for intra-timestep dependencies (multi-layer RNNs)
+        static std::vector<Statement> preprocessBatch(const std::vector<Statement>& statements, Environment& env);
+
         std::string name() const override { return "VirtualIndexPreprocessor"; }
 
         int priority() const override { return 5; } // High priority - expand before other preprocessing
@@ -60,10 +63,15 @@ namespace tl {
         static int getIterationCount(const std::string& indexName, const Environment& env,
                                       const TensorEquation& eq);
 
-        // Helper to pre-allocate tensor storage for virtual time steps
+        // Helper to pre-allocate tensor storage for virtual time steps (deprecated for Mode B)
         static void preallocateStorage(const TensorEquation& eq, Environment& env,
                                        const std::string& virtualIndexName,
                                        int lhsOffset, int iterationCount);
+
+        // Helper to ensure tensor has minimum slots in virtual dimension (Mode B)
+        static void ensureMinimumVirtualSlots(const TensorEquation& eq, Environment& env,
+                                               const std::string& virtualIndexName,
+                                               int minSlots);
     };
 
 } // namespace tl

@@ -158,20 +158,20 @@ W_out[2] = 0.5
 W_out[3] = 0.3
 
 // Final output (after all time steps)
-// Uses the final state stored at virtual time *5
-Output = sigmoid(W_out[i] State[i, *5])
+// MODE B: After recurrence completes, final state is in State[i, 0]
+// (all intermediate states were overwritten in that slot)
+Output = sigmoid(W_out[i] State[i, 0])
 
 // ============================================
 // Queries
 // ============================================
 
 // Query final hidden state
-// Note: State[i, *5] contains the final state
-// (all intermediate states were overwritten)
-State[0, *5]?
-State[1, *5]?
-State[2, *5]?
-State[3, *5]?
+// MODE B: Final state is in slot 0 after recurrence completes
+State[0, 0]?
+State[1, 0]?
+State[2, 0]?
+State[3, 0]?
 
 // Query final output
 Output?

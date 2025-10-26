@@ -169,13 +169,97 @@ void TensorLogicVM::debugLog(const std::string &msg) const {
 }
 
 void TensorLogicVM::execute(const Program &program) {
+  if (debug_) {
+    debugLog("========== EXECUTE START ==========");
+    debugLog("Total statements: " + std::to_string(program.statements.size()));
+  }
+
+  // BATCH PREPROCESSING: Collect virtual-indexed statements for batch processing
+  std::vector<Statement> virtualIndexedStmts;
+  std::vector<size_t> virtualIndexedIndices;
+  std::vector<Statement> processedStatements;
+  std::vector<size_t> processedIndices;
+
+  // First pass: identify virtual-indexed statements
   for (size_t i = 0; i < program.statements.size(); ++i) {
     const auto &st = program.statements[i];
-    if (debug_) {
-      debugLog("Stmt " + std::to_string(i) + ": " + toString(st));
+
+    bool isVirtualIndexed = false;
+    if (std::holds_alternative<TensorEquation>(st)) {
+      const auto& eq = std::get<TensorEquation>(st);
+
+      // Check LHS for virtual indices
+      for (const auto& idx : eq.lhs.indices) {
+        if (std::holds_alternative<VirtualIndex>(idx.value)) {
+          isVirtualIndexed = true;
+          break;
+        }
+      }
+
+      // If LHS has no virtual index, check RHS
+      // IMPORTANT: Only batch complex RHS expressions (products, sums, etc.)
+      // Simple RHS tensor references (Combined[0] = State_fwd[0, *3]) are handled inline
+      // Complex RHS expressions (Input_proj2[i,t] = U2[i,j]State1[j,*t+1]) need batch preprocessing
+      if (!isVirtualIndexed && eq.clauses.size() == 1 && eq.clauses[0].expr) {
+        const Expr& rhs = *eq.clauses[0].expr;
+
+        // Helper to check if expression has virtual indices
+        std::function<bool(const Expr&)> hasVirtualIndex = [&](const Expr& expr) -> bool {
+          if (auto* ref = std::get_if<ExprTensorRef>(&expr.node)) {
+            for (const auto& idx : ref->ref.indices) {
+              if (std::holds_alternative<VirtualIndex>(idx.value)) {
+                return true;
+              }
+            }
+          } else if (auto* bin = std::get_if<ExprBinary>(&expr.node)) {
+            return hasVirtualIndex(*bin->lhs) || hasVirtualIndex(*bin->rhs);
+          } else if (auto* un = std::get_if<ExprUnary>(&expr.node)) {
+            return hasVirtualIndex(*un->operand);
+          } else if (auto* call = std::get_if<ExprCall>(&expr.node)) {
+            for (const auto& arg : call->args) {
+              if (hasVirtualIndex(*arg)) return true;
+            }
+          }
+          return false;
+        };
+
+        // Only batch if RHS is a COMPLEX expression (not a simple tensor reference)
+        if (std::holds_alternative<ExprBinary>(rhs.node)) {
+          // Complex expression (product, sum, etc.) - check for virtual indices
+          isVirtualIndexed = hasVirtualIndex(rhs);
+        } else if (std::holds_alternative<ExprUnary>(rhs.node)) {
+          // Unary expression - check for virtual indices
+          isVirtualIndexed = hasVirtualIndex(rhs);
+        } else if (std::holds_alternative<ExprCall>(rhs.node)) {
+          // Function application - check for virtual indices
+          isVirtualIndexed = hasVirtualIndex(rhs);
+        }
+        // Note: Simple ExprTensorRef with virtual indices is NOT batched - handled inline
+      }
     }
 
-    // FIRST: Preprocess statement (may expand into multiple statements)
+    if (isVirtualIndexed) {
+      virtualIndexedStmts.push_back(st);
+      virtualIndexedIndices.push_back(i);
+    } else {
+      processedStatements.push_back(st);
+      processedIndices.push_back(i);
+    }
+  }
+
+  // IMPORTANT: Execute non-virtual statements first so tensors are defined
+  // This allows getIterationCount to find driving tensors like Input
+  if (debug_) {
+    debugLog("Executing " + std::to_string(processedStatements.size()) + " non-virtual statements first");
+  }
+
+  for (size_t i = 0; i < processedStatements.size(); ++i) {
+    const auto &st = processedStatements[i];
+    if (debug_) {
+      debugLog("Non-virtual stmt " + std::to_string(i) + ": " + toString(st));
+    }
+
+    // FIRST: Preprocess statement (for non-virtual preprocessors)
     auto preprocessed = preprocessor_registry_.preprocess(st, env_);
 
     // THEN: Execute each preprocessed statement
@@ -187,10 +271,6 @@ void TensorLogicVM::execute(const Program &program) {
 
       if (std::holds_alternative<TensorEquation>(preprocessed_st)) {
         execTensorEquation(std::get<TensorEquation>(preprocessed_st));
-      } else if (std::holds_alternative<Query>(preprocessed_st)) {
-        // Ensure closure is up-to-date before answering queries
-        datalog_engine_.saturate();
-        execQuery(std::get<Query>(preprocessed_st));
       } else if (std::holds_alternative<DatalogFact>(preprocessed_st)) {
         datalog_engine_.addFact(std::get<DatalogFact>(preprocessed_st));
       } else if (std::holds_alternative<DatalogRule>(preprocessed_st)) {
@@ -334,7 +414,66 @@ void TensorLogicVM::execute(const Program &program) {
         if (debug_) debugLog("Skipping non-tensor statement (not yet implemented)");
       }
     } // end for each preprocessed statement
-  } // end for each original statement
+  } // end for each non-virtual statement
+
+  // NOW batch preprocess and execute virtual-indexed statements
+  // At this point, tensors like Input should be defined
+  if (!virtualIndexedStmts.empty()) {
+    if (debug_) {
+      debugLog("Batch preprocessing " + std::to_string(virtualIndexedStmts.size()) + " virtual-indexed statements");
+    }
+    std::vector<Statement> expandedVirtual = VirtualIndexPreprocessor::preprocessBatch(virtualIndexedStmts, env_);
+
+    if (debug_) {
+      debugLog("Executing " + std::to_string(expandedVirtual.size()) + " expanded virtual statements");
+    }
+
+    for (size_t i = 0; i < expandedVirtual.size(); ++i) {
+      const auto &st = expandedVirtual[i];
+
+      if (std::holds_alternative<TensorEquation>(st)) {
+        const auto& eq = std::get<TensorEquation>(st);
+        if (debug_) {
+          std::ostringstream oss;
+          oss << "Virtual stmt " << i << ": " << Environment::key(eq.lhs) << " = ...";
+
+          // Show LHS tensor shape if it exists
+          std::string lhsName = Environment::key(eq.lhs);
+          if (env_.has(lhsName)) {
+            oss << " (existing shape: " << env_.lookup(lhsName).sizes() << ")";
+          } else {
+            oss << " (new tensor)";
+          }
+          debugLog(oss.str());
+        }
+
+        try {
+          execTensorEquation(eq);
+        } catch (const std::exception& e) {
+          if (debug_) {
+            debugLog("ERROR executing virtual stmt " + std::to_string(i));
+            debugLog("  LHS: " + Environment::key(eq.lhs));
+            debugLog("  Error: " + std::string(e.what()));
+          }
+          throw;
+        }
+      } else if (std::holds_alternative<Query>(st)) {
+        // Ensure closure is up-to-date before answering queries
+        datalog_engine_.saturate();
+        execQuery(std::get<Query>(st));
+      }
+    }
+  }
+
+  // Finally, execute any remaining queries that weren't virtual-indexed
+  for (size_t i = 0; i < program.statements.size(); ++i) {
+    const auto &st = program.statements[i];
+    if (std::holds_alternative<Query>(st)) {
+      // Ensure closure is up-to-date before answering queries
+      datalog_engine_.saturate();
+      execQuery(std::get<Query>(st));
+    }
+  }
 }
 
 // Resolve indices to concrete integer positions using either numeric indices
@@ -372,39 +511,165 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
   // New refactored version using ExecutorRegistry
   try {
     std::string lhsName = Environment::key(eq.lhs);
+    if (debug_) {
+      std::ostringstream oss;
+      oss << "Executing: " << lhsName;
+      if (!eq.lhs.indices.empty()) {
+        oss << " with " << eq.lhs.indices.size() << " indices";
+      }
+      debugLog(oss.str());
+    }
     Tensor result = executor_registry_.execute(eq, env_, *torch_);
+    if (debug_) {
+      std::ostringstream oss;
+      oss << "  Result shape: " << result.sizes() << ", numel=" << result.numel();
+      debugLog(oss.str());
+    }
 
-    // Special case: indexed LHS (e.g., avg[1] = expr)
-    // Some executors (ScalarAssignExecutor) handle this internally and return the full tensor.
+    // Special case: indexed LHS (e.g., avg[1] = expr, Input_proj2[i,t] = expr)
+    // Some executors (ScalarAssignExecutor, ListLiteralExecutor) handle this internally and return the full tensor.
     // Others (ExpressionExecutor for non-literal RHS) just return the RHS value.
     // We need to detect the latter case and do the indexed assignment ourselves.
-    if (!eq.lhs.indices.empty() && env_.has(lhsName)) {
-      Tensor existingTensor = env_.lookup(lhsName);
+    if (!eq.lhs.indices.empty()) {
+      // Check if all indices are concrete (number literals AND/OR uppercase labels)
+      // ScalarAssignExecutor handles assignments where all indices are concrete/labels.
+      // If there are any lowercase free variables, VM must handle indexed assignment.
+      bool allConcreteOrLabelIndices = true;
+      bool hasFreeVariables = false;
 
-      // Check if result is smaller than existing tensor (indicating executor returned RHS value)
-      // In this case, we need to do indexed assignment
-      if (result.numel() < existingTensor.numel() || result.dim() == 0) {
-        // Build index list from LHS indices
-        // Identifiers (free variables like 'i') become Slice()
-        // NumberLiterals (concrete like '1') become concrete indices
-        std::vector<torch::indexing::TensorIndex> indices;
-        bool hasConcreteIndex = false;
-        for (const auto& idx : eq.lhs.indices) {
-          if (const auto* num = std::get_if<NumberLiteral>(&idx.value)) {
-            long long v = std::stoll(num->text);
-            indices.push_back(static_cast<int64_t>(v));
-            hasConcreteIndex = true;
-          } else if (std::holds_alternative<Identifier>(idx.value)) {
-            // Free variable - use slice to cover all values in that dimension
-            indices.push_back(torch::indexing::Slice());
+      for (const auto& idx : eq.lhs.indices) {
+        if (std::holds_alternative<NumberLiteral>(idx.value)) {
+          // Concrete numeric index - OK for ScalarAssignExecutor
+          continue;
+        } else if (auto* id = std::get_if<Identifier>(&idx.value)) {
+          // Check if it's a label (uppercase) or a free variable (lowercase)
+          if (!id->name.empty() && std::isupper(id->name[0])) {
+            // Uppercase label - OK for ScalarAssignExecutor
+            continue;
+          } else {
+            // Lowercase free variable - requires VM indexed assignment
+            hasFreeVariables = true;
+            break;
           }
+        } else {
+          // Other types (VirtualIndex, etc.) - not handled by ScalarAssignExecutor
+          allConcreteOrLabelIndices = false;
+          break;
         }
+      }
 
-        // Only do indexed assignment if we have at least one concrete index
-        // Otherwise, it's a full tensor assignment
-        if (hasConcreteIndex && !indices.empty()) {
-          existingTensor.index_put_(indices, result);
-          return;  // Don't rebind - we modified in-place
+      // If all indices are concrete/labels AND there are no free variables,
+      // ScalarAssignExecutor or ListLiteralExecutor already handled the indexed assignment
+      // and returned the full tensor. Just bind it.
+      if (allConcreteOrLabelIndices && !hasFreeVariables) {
+        if (debug_) {
+          debugLog("  All concrete/label indices - executor handled assignment");
+        }
+        env_.bind(eq.lhs, result);
+        return;
+      }
+
+      // Otherwise, we have free variables (identifiers) and need to do indexed assignment
+      // Build index list from LHS indices
+      // Identifiers (free variables like 'i') become Slice()
+      // NumberLiterals (concrete like '1') become concrete indices
+      std::vector<torch::indexing::TensorIndex> indices;
+      std::vector<int64_t> concreteIndices;  // Track concrete index values
+      std::vector<bool> isConcreteFlag;      // Track which positions are concrete
+      bool hasConcreteIndex = false;
+
+      for (const auto& idx : eq.lhs.indices) {
+        if (const auto* num = std::get_if<NumberLiteral>(&idx.value)) {
+          long long v = std::stoll(num->text);
+          indices.push_back(static_cast<int64_t>(v));
+          concreteIndices.push_back(static_cast<int64_t>(v));
+          isConcreteFlag.push_back(true);
+          hasConcreteIndex = true;
+        } else if (std::holds_alternative<Identifier>(idx.value)) {
+          // Free variable - use slice to cover all values in that dimension
+          indices.push_back(torch::indexing::Slice());
+          concreteIndices.push_back(-1);  // Placeholder
+          isConcreteFlag.push_back(false);
+        }
+      }
+
+      if (!indices.empty()) {
+        // Check if tensor exists and needs indexed assignment
+        if (env_.has(lhsName)) {
+          Tensor existingTensor = env_.lookup(lhsName);
+
+          if (debug_) {
+            std::ostringstream oss;
+            oss << "  Indexed assignment (mixed): existing=" << existingTensor.sizes()
+                << " result=" << result.sizes() << " hasConcreteIndex=" << hasConcreteIndex;
+            debugLog(oss.str());
+          }
+
+          if (result.numel() < existingTensor.numel() || result.dim() == 0 || hasConcreteIndex) {
+            // Check if we need to resize to accommodate the concrete indices
+            std::vector<int64_t> requiredShape(existingTensor.sizes().begin(), existingTensor.sizes().end());
+            bool needsResize = false;
+
+            for (size_t i = 0; i < isConcreteFlag.size(); ++i) {
+              if (isConcreteFlag[i]) {
+                int64_t requiredSize = concreteIndices[i] + 1;
+                if (i >= requiredShape.size()) {
+                  requiredShape.resize(i + 1, 1);
+                  requiredShape[i] = requiredSize;
+                  needsResize = true;
+                } else if (requiredShape[i] < requiredSize) {
+                  requiredShape[i] = requiredSize;
+                  needsResize = true;
+                }
+              }
+            }
+
+            // Resize if needed
+            if (needsResize) {
+              Tensor resizedTensor = torch::zeros(requiredShape, existingTensor.options());
+              // Copy existing values
+              if (existingTensor.numel() > 0) {
+                std::vector<torch::indexing::TensorIndex> copyIndices;
+                for (int i = 0; i < existingTensor.dim(); ++i) {
+                  copyIndices.push_back(torch::indexing::Slice(0, existingTensor.size(i)));
+                }
+                resizedTensor.index_put_(copyIndices, existingTensor);
+              }
+              env_.bind(lhsName, resizedTensor);
+              resizedTensor.index_put_(indices, result);
+              return;
+            } else {
+              // No resize needed, just do indexed assignment
+              existingTensor.index_put_(indices, result);
+              return;
+            }
+          }
+        } else if (hasConcreteIndex) {
+          // Tensor doesn't exist yet, and we have concrete indices
+          // We need to create it with appropriate size
+
+          // Infer shape from indices and result
+          std::vector<int64_t> shape;
+          int resultDim = 0;
+          for (size_t i = 0; i < isConcreteFlag.size(); ++i) {
+            if (isConcreteFlag[i]) {
+              shape.push_back(concreteIndices[i] + 1);
+            } else {
+              // Slice - use corresponding dimension from result
+              if (resultDim < result.dim()) {
+                shape.push_back(result.size(resultDim));
+                resultDim++;
+              } else {
+                shape.push_back(1);
+              }
+            }
+          }
+
+          // Create new tensor and assign
+          Tensor newTensor = torch::zeros(shape, result.options());
+          newTensor.index_put_(indices, result);
+          env_.bind(lhsName, newTensor);
+          return;
         }
       }
     }
