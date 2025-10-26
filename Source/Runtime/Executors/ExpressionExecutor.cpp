@@ -234,6 +234,34 @@ namespace tl {
                 if (x.dim() == 0) return torch::tensor(1.0f);
                 int64_t dim = std::max<int64_t>(0, x.dim() - 1);
                 return torch::softmax(x, dim);
+            } else if (call->func.name == "cos") {
+                need1("cos");
+                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+                return torch::cos(x);
+            } else if (call->func.name == "sin") {
+                need1("sin");
+                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+                return torch::sin(x);
+            } else if (call->func.name == "tan") {
+                need1("tan");
+                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+                return torch::tan(x);
+            } else if (call->func.name == "acos") {
+                need1("acos");
+                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+                return torch::acos(x);
+            } else if (call->func.name == "asin") {
+                need1("asin");
+                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+                return torch::asin(x);
+            } else if (call->func.name == "atan") {
+                need1("atan");
+                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+                return torch::atan(x);
+            } else if (call->func.name == "log") {
+                need1("log");
+                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+                return torch::log(x);
             }
 
             throw ExecutionError("Unsupported function: " + call->func.name);
