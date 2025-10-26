@@ -28,4 +28,4 @@ x[*t+1] = cos(x[*t])
 // Final value converges to x ≈ 0.739 (solution to x = cos(x))
 
 // Query after N iterations (implementation-dependent)
-x[*10]?  // Value after 10 iterations
+x[*0]?  // Value after 10 iterations

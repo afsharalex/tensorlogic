@@ -149,5 +149,5 @@ HiddenState[i, *t+1] = OutputGate[i, *t+1] * tanh(CellState[i, *t+1])
 // ============================================
 
 // Query final states after processing all time steps
-HiddenState[i, *4]?
-CellState[i, *4]?
+HiddenState[i, 0]?
+CellState[i, 0]?

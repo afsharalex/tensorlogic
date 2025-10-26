@@ -99,4 +99,4 @@ h[i, *t+1] = (1.0 - z[i, *t+1]) * h[i, *t]
            + z[i, *t+1] * h_candidate[i, *t+1]
 
 // Queries
-h[i, *3]?  // Final state after 3 time steps
+h[i, 0]?  // Final state after 3 time steps

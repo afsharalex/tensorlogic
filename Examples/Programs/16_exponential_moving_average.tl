@@ -27,4 +27,4 @@ avg[*t+1] = (1.0 - alpha) * avg[*t] + alpha * data[t]
 // t=3: avg[*4] = 0.9*1.725 + 0.1*9.0 = 2.4525
 // t=4: avg[*5] = 0.9*2.4525 + 0.1*7.0 = 2.90725
 
-avg[*5]?  // Final moving average
+avg[0]?  // Final moving average
