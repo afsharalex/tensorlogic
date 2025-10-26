@@ -698,6 +698,35 @@ void TensorLogicVM::execQuery(const Query &q) {
     // If specific indices provided (numeric or label), print scalar value
     std::vector<int64_t> idxs;
     if (!ref.indices.empty() && resolveConcreteIndices(ref, env_, idxs, false)) {
+      // Special case: 0-dim (scalar) tensors cannot be indexed
+      // If query is like avg[0]?, we treat [0] as a "no-op" index for scalars
+      if (t.dim() == 0) {
+        // Check that all indices are 0
+        bool allZero = true;
+        for (int64_t idx : idxs) {
+          if (idx != 0) {
+            allZero = false;
+            break;
+          }
+        }
+        if (!allZero) {
+          throw std::runtime_error("Cannot index 0-dim tensor with non-zero indices: " + name);
+        }
+        // Just use the scalar value directly
+        double val = 0.0;
+        try { val = t.item<double>(); } catch (...) { val = t.item<float>(); }
+        (*output_stream_) << name << "[";
+        for (size_t i = 0; i < idxs.size(); ++i) { if (i) (*output_stream_) << ","; (*output_stream_) << idxs[i]; }
+        (*output_stream_) << "] = " << val << std::endl;
+        if (debug_) {
+          std::ostringstream oss;
+          oss << "Query tensor present: shape=" << t.sizes() << " (0-dim scalar)";
+          debugLog(oss.str());
+        }
+        return;
+      }
+
+      // Normal case: index into multi-dimensional tensor
       std::vector<TensorIndex> elemIdx;
       elemIdx.reserve(idxs.size());
       for (int64_t v : idxs) elemIdx.emplace_back(v);
