@@ -7,6 +7,28 @@
 #include <utility>
 
 namespace tl {
+    /**
+     * Flag to denote this loop has no driving tensor. The exit condition
+     * is when the change is no longer greater-than-or-equal-to the
+     * `CONVERGENCE_TOLERANCE`.
+     */
+    constexpr int CONVERGENCE_FLAG = std::numeric_limits<int>::max();
+    /**
+     * Number to determine if the loop without a driving tensor has ended.
+     * If the absolute value has not changed greater-than-or-equal-to the tolerance,
+     * then we return.
+     */
+    constexpr float CONVERGENCE_TOLERANCE = 0.0001f;
+
+    /**
+     * Consecutive iterations to confirm convergence.
+     * I.E., Tensor value has not changed more than the tolerance for X iterations.
+     */
+    constexpr int MAX_CONSECUTIVE_STABLE = 10;
+    /**
+     * Safety cap to prevent infinite loops.
+     */
+    constexpr int ABSOLUTE_MAX_ITERS = 10000;
 
     /**
      * @brief Preprocessor for virtual index expansion

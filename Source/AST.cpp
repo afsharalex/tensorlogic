@@ -155,6 +155,19 @@ std::string toString(const Statement& st) {
             }
             return oss.str();
         }
+        std::string operator()(const FixedPointLoop& loop) const {
+            std::ostringstream oss;
+            oss << "FixedPointLoop(" << loop.monitoredTensor << "): ";
+            oss << toString(loop.equation.lhs) << " " << loop.equation.projection << " ";
+            for (size_t i = 0; i < loop.equation.clauses.size(); ++i) {
+                if (i) oss << " | ";
+                oss << toString(*loop.equation.clauses[i].expr);
+                if (loop.equation.clauses[i].guard) {
+                    oss << " : " << toString(**loop.equation.clauses[i].guard);
+                }
+            }
+            return oss.str();
+        }
     } v;
     return std::visit(v, st);
 }

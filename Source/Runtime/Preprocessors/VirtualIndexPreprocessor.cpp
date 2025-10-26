@@ -21,6 +21,7 @@ bool hasVirtualIndices(const std::vector<Index>& indices) {
     return false;
 }
 
+
 struct VirtualIndexCollector {
     // map (tensorName, virtualIndexName) -> set of offsets
     std::map<std::pair<std::string, std::string>, std::set<int>> tensorVirtualIndices;
@@ -72,6 +73,38 @@ static std::map<std::pair<std::string, std::string>, std::set<int>> collectRhsVi
 
 static bool isAllDigits(const std::string& s) {
     return !s.empty() && std::all_of(s.begin(), s.end(), [](const unsigned char ch) { return std::isdigit(ch); });
+}
+    // Helper to determine if is self-recursive (without driver)
+static bool isSelfRecursiveEquation(const TensorEquation& eq, const std::string& virtualIndexName) {
+    // Get LHS tensor base name (strip indices)
+    std::string lhsTensorName = Environment::key(eq.lhs);
+    size_t bracket = lhsTensorName.find('[');
+    std::string lhsBaseName = (bracket != std::string::npos)
+        ? lhsTensorName.substr(0, bracket)
+        : lhsTensorName;
+
+    // Check if LHS has virtual index
+    bool lhsHasVirtual = false;
+    for (const auto& idx : eq.lhs.indices) {
+        if (auto* vid = std::get_if<VirtualIndex>(&idx.value)) {
+            lhsHasVirtual = true;
+            break;
+        }
+    }
+
+    if (!lhsHasVirtual) return false;
+
+    // Check if RHS references same tensor with virtual index
+    auto rhsVirtuals = collectRhsVirtualIndices(eq);
+    for (const auto& [key, offsets] : rhsVirtuals) {
+        const auto& [tensorName, virtName] = key;
+        if (tensorName == lhsBaseName && virtName == virtualIndexName) {
+            // Self-recursive: same tensor on both sides with virtual index
+            return true;
+        }
+    }
+
+    return false;
 }
 
 // Visitor to find all identifiers used as regular indices in an expression
@@ -534,6 +567,20 @@ std::vector<Statement> VirtualIndexPreprocessor::preprocessBatch(const std::vect
         // Determine iteration count (from first equation)
         int iterationCount = getIterationCount(virtualIndexName, env, eqInfos[0].eq);
 
+        // Handle fixed-point mode
+        if (iterationCount == CONVERGENCE_FLAG) {
+            std::vector<Statement> fixedPointLoops;
+            for (const auto& info : eqInfos) {
+                std::string lhsKey = Environment::key(info.eq.lhs);
+                size_t bracket = lhsKey.find('[');
+                std::string baseTensorName = (bracket != std::string::npos)
+                    ? lhsKey.substr(0, bracket)
+                    : lhsKey;
+                fixedPointLoops.push_back(FixedPointLoop{info.eq, baseTensorName,info.eq.loc});
+            }
+            return fixedPointLoops;
+        }
+
         // Ensure all LHS tensors have minimum slots (skip RHS-only equations)
         for (const auto& info : eqInfos) {
             if (!info.isRhsOnly) {
@@ -767,6 +814,19 @@ std::vector<Statement> VirtualIndexPreprocessor::preprocess(const Statement& st,
     // Step 3: Determine iteration count
     int iterationCount = getIterationCount(virtualIndexName, env, eq);
 
+    // Handle fixed-point mode
+    if (iterationCount == CONVERGENCE_FLAG) {
+        // Extract base tensor name for monitoring
+        std::string lhsKey = Environment::key(eq.lhs);
+        size_t bracket = lhsKey.find('[');
+        std::string baseTensorName = (bracket != std::string::npos)
+            ? lhsKey.substr(0, bracket)
+            : lhsKey;
+
+        // Return FixedPointLoop statement - VM will handle convergence
+        return {FixedPointLoop{eq, baseTensorName, eq.loc}};
+    }
+
     // Step 4: MODE B with SSA - ensure tensor exists with proper shape
     ensureMinimumVirtualSlots(eq, env, virtualIndexName, 1);
 
@@ -969,9 +1029,18 @@ int VirtualIndexPreprocessor::getIterationCount(const std::string& indexName, co
         }
     }
 
-    // TODO: We should handle this smarter.
-    // If we can't find any tensor, try default of 10 or throw error
-    return 10;
+    if (isSelfRecursiveEquation(eq, indexName)) {
+        return CONVERGENCE_FLAG; // Sentinel for fixed-point mode
+    }
+
+    throw std::runtime_error(
+        "VirtualIndexPreprocessor: Cannot determine iteration count for virtual index '*' " +
+        indexName + "'. Either:\n" +
+        "  1. Provide a driver tensor indexed by '" + indexName +
+        "' (e.g., Input[..., " + indexName + "]), or\n" +
+        "  2. Use self-recursive pattern for fixed-point iteration (e.g., x[*" +
+        indexName + "+1] = f(x[*" + indexName + "]))"
+        );
 }
 
 void VirtualIndexPreprocessor::preallocateStorage(const TensorEquation& eq, Environment& env,

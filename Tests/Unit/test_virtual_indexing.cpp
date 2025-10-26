@@ -853,8 +853,8 @@ TEST_CASE("Virtual indexing - Iterative algorithm", "[virtual_indexing]") {
     auto x = vm.env().lookup("x");
 
     // Fixed-point of x = cos(x) is approximately 0.739085
-    // Allow a slightly wider tolerance because the number of iterations is implementation-defined
-    REQUIRE_THAT(x.item<float>(), WithinAbs(0.739f, 0.01f));
+    // Should converge on 0.739085
+    REQUIRE_THAT(x.item<float>(), WithinAbs(0.739f, 0.001f));
 }
 
 TEST_CASE("Virtual indexing - Exponential moving average", "[virtual_indexing]") {
@@ -898,4 +898,20 @@ TEST_CASE("Virtual indexing - Exponential moving average", "[virtual_indexing]")
     auto avg = vm.env().lookup("avg");
 
     REQUIRE_THAT(avg.item<float>(), WithinAbs(2.907f, 0.001f));
+}
+
+TEST_CASE("Virtual indexing - Error on invalid configuration", "[virtual_indexing]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+
+    // This should throw an error: no driver tensor and not self-recursive
+    auto prog = parseProgram(R"(
+        x[0] = 1.0
+        y[0] = 2.0
+
+        // Invalid: x reads from y (not self-recursive), but y doesn't have regular index
+        x[*t+1] = cos(y[*t])
+    )");
+
+    REQUIRE_THROWS_AS(vm.execute(prog), std::runtime_error);
 }

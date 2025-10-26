@@ -196,46 +196,15 @@ void TensorLogicVM::execute(const Program &program) {
         }
       }
 
-      // If LHS has no virtual index, check RHS
-      // IMPORTANT: Only batch complex RHS expressions (products, sums, etc.)
-      // Simple RHS tensor references (Combined[0] = State_fwd[0, *3]) are handled inline
-      // Complex RHS expressions (Input_proj2[i,t] = U2[i,j]State1[j,*t+1]) need batch preprocessing
-      if (!isVirtualIndexed && eq.clauses.size() == 1 && eq.clauses[0].expr) {
-        const Expr& rhs = *eq.clauses[0].expr;
+      // IMPORTANT: RHS-only virtual indices should NOT be batched
+      // They are handled by single-statement preprocessing which substitutes them with 0
+      // Only batch equations that have virtual indices on BOTH LHS and RHS (recurrent equations)
+      // Examples:
+      //   - State[i, *t+1] = W[i,j] State[j, *t] + Input[i, t]  -> BATCH (LHS has *t)
+      //   - Output = sigmoid(W_out[i] State[i, *5])  -> DON'T BATCH (only RHS has *5)
 
-        // Helper to check if expression has virtual indices
-        std::function<bool(const Expr&)> hasVirtualIndex = [&](const Expr& expr) -> bool {
-          if (auto* ref = std::get_if<ExprTensorRef>(&expr.node)) {
-            for (const auto& idx : ref->ref.indices) {
-              if (std::holds_alternative<VirtualIndex>(idx.value)) {
-                return true;
-              }
-            }
-          } else if (auto* bin = std::get_if<ExprBinary>(&expr.node)) {
-            return hasVirtualIndex(*bin->lhs) || hasVirtualIndex(*bin->rhs);
-          } else if (auto* un = std::get_if<ExprUnary>(&expr.node)) {
-            return hasVirtualIndex(*un->operand);
-          } else if (auto* call = std::get_if<ExprCall>(&expr.node)) {
-            for (const auto& arg : call->args) {
-              if (hasVirtualIndex(*arg)) return true;
-            }
-          }
-          return false;
-        };
-
-        // Only batch if RHS is a COMPLEX expression (not a simple tensor reference)
-        if (std::holds_alternative<ExprBinary>(rhs.node)) {
-          // Complex expression (product, sum, etc.) - check for virtual indices
-          isVirtualIndexed = hasVirtualIndex(rhs);
-        } else if (std::holds_alternative<ExprUnary>(rhs.node)) {
-          // Unary expression - check for virtual indices
-          isVirtualIndexed = hasVirtualIndex(rhs);
-        } else if (std::holds_alternative<ExprCall>(rhs.node)) {
-          // Function application - check for virtual indices
-          isVirtualIndexed = hasVirtualIndex(rhs);
-        }
-        // Note: Simple ExprTensorRef with virtual indices is NOT batched - handled inline
-      }
+      // Note: We already checked LHS above and found no virtual indices
+      // So this equation will go through normal preprocessing, not batch
     }
 
     if (isVirtualIndexed) {
@@ -271,6 +240,8 @@ void TensorLogicVM::execute(const Program &program) {
 
       if (std::holds_alternative<TensorEquation>(preprocessed_st)) {
         execTensorEquation(std::get<TensorEquation>(preprocessed_st));
+      } else if (std::holds_alternative<FixedPointLoop>(preprocessed_st)) {
+        executeFixedPointLoop(std::get<FixedPointLoop>(preprocessed_st));
       } else if (std::holds_alternative<DatalogFact>(preprocessed_st)) {
         datalog_engine_.addFact(std::get<DatalogFact>(preprocessed_st));
       } else if (std::holds_alternative<DatalogRule>(preprocessed_st)) {
@@ -453,6 +424,21 @@ void TensorLogicVM::execute(const Program &program) {
           if (debug_) {
             debugLog("ERROR executing virtual stmt " + std::to_string(i));
             debugLog("  LHS: " + Environment::key(eq.lhs));
+            debugLog("  Error: " + std::string(e.what()));
+          }
+          throw;
+        }
+      } else if (std::holds_alternative<FixedPointLoop>(st)) {
+        const auto& loop = std::get<FixedPointLoop>(st);
+        if (debug_) {
+          debugLog("Virtual stmt " + std::to_string(i) + ": FixedPointLoop for " + loop.monitoredTensor);
+        }
+        try {
+          executeFixedPointLoop(loop);
+        } catch (const std::exception& e) {
+          if (debug_) {
+            debugLog("ERROR executing fixed-point loop " + std::to_string(i));
+            debugLog("  Monitored tensor: " + loop.monitoredTensor);
             debugLog("  Error: " + std::string(e.what()));
           }
           throw;
@@ -681,6 +667,129 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
       debugLog("Execution error: " + std::string(e.what()));
     }
     throw;
+  }
+}
+
+// Recursive helper for expression substitution
+void TensorLogicVM::substituteVirtualIndexInExpr(Expr &expr, int concreteTimeStep) {
+  if (auto *ref = std::get_if<ExprTensorRef>(&expr.node)) {
+    for (auto &idx : ref->ref.indices) {
+      if (auto *virt = std::get_if<VirtualIndex>(&idx.value)) {
+        int slot = concreteTimeStep + virt->offset;
+        NumberLiteral num;
+        num.text = std::to_string(slot);
+        num.loc = idx.loc;
+        idx.value = num;
+      }
+    }
+  } else if (auto *bin = std::get_if<ExprBinary>(&expr.node)) {
+    substituteVirtualIndexInExpr(*bin->lhs, concreteTimeStep);
+    substituteVirtualIndexInExpr(*bin->rhs, concreteTimeStep);
+  } else if (auto *un = std::get_if<ExprUnary>(&expr.node)) {
+    substituteVirtualIndexInExpr(*un->operand, concreteTimeStep);
+  } else if (auto *call = std::get_if<ExprCall>(&expr.node)) {
+    for (auto &arg : call->args) {
+      substituteVirtualIndexInExpr(*arg, concreteTimeStep);
+    }
+  } else if (auto *paren = std::get_if<ExprParen>(&expr.node)) {
+    substituteVirtualIndexInExpr(*paren->inner, concreteTimeStep);
+  } else if (auto *list = std::get_if<ExprList>(&expr.node)) {
+    for (auto &elem : list->elements) {
+      substituteVirtualIndexInExpr(*elem, concreteTimeStep);
+    }
+  }
+  // ExprNumber, ExprString: no substitution needed
+}
+
+// Helper to expand virtual indices for a single iteration
+TensorEquation TensorLogicVM::substituteVirtualIndex(const TensorEquation &eq, int concreteTimeStep) {
+  TensorEquation result = eq;
+
+  // Substitute LHS virtual indices
+  for (auto &idx : result.lhs.indices) {
+    if (auto *virt = std::get_if<VirtualIndex>(&idx.value)) {
+      int slot = concreteTimeStep + virt->offset;
+      NumberLiteral num;
+      num.text = std::to_string(slot);
+      num.loc = idx.loc;
+      idx.value = num;
+    }
+  }
+
+  // Substitute RHS virtual indices (in all expressions)
+  for (auto &clause : result.clauses) {
+    substituteVirtualIndexInExpr(*clause.expr, concreteTimeStep);
+    if (clause.guard) {
+      substituteVirtualIndexInExpr(**clause.guard, concreteTimeStep);
+    }
+  }
+
+  return result;
+}
+
+void TensorLogicVM::executeFixedPointLoop(const FixedPointLoop &loop) {
+  constexpr int ABSOLUTE_MAX = ABSOLUTE_MAX_ITERS;  // 10000
+  constexpr int MAX_STABLE = MAX_CONSECUTIVE_STABLE;  // 10
+  constexpr float TOLERANCE = CONVERGENCE_TOLERANCE;  // 0.0001f
+
+  int consecutiveStableCount = 0;
+  int totalIterations = 0;
+  Tensor prevState;
+
+  if (debug_) {
+    std::ostringstream oss;
+    oss << "Fixed-point loop for " << loop.monitoredTensor
+        << " (tolerance=" << TOLERANCE
+        << ", maxStable=" << MAX_STABLE << ")";
+    debugLog(oss.str());
+  }
+
+  while (totalIterations < ABSOLUTE_MAX) {
+    // Save previous state (after first iteration)
+    if (totalIterations > 0 && env_.has(loop.monitoredTensor)) {
+      prevState = env_.lookup(loop.monitoredTensor).clone();
+    }
+
+    // Execute one iteration by substituting virtual index with concrete timestep
+    TensorEquation expandedEq = substituteVirtualIndex(loop.equation, totalIterations);
+    execTensorEquation(expandedEq);
+
+    totalIterations++;
+
+    // Check convergence (after second iteration onwards)
+    if (totalIterations > 1 && env_.has(loop.monitoredTensor)) {
+      Tensor currentState = env_.lookup(loop.monitoredTensor);
+
+      // Compute maximum absolute change across all elements
+      float maxChange = (currentState - prevState).abs().max().item<float>();
+
+      if (maxChange <= TOLERANCE) {
+        // Value is stable - increment counter
+        consecutiveStableCount++;
+
+        if (consecutiveStableCount >= MAX_STABLE) {
+          // Converged! Exit loop
+          if (debug_) {
+            std::ostringstream oss;
+            oss << "  Converged after " << totalIterations
+                << " iterations (change=" << maxChange << ")";
+            debugLog(oss.str());
+          }
+          return;
+        }
+      } else {
+        // Value changed significantly - reset stability counter
+        consecutiveStableCount = 0;
+      }
+    }
+  }
+
+  // Hit absolute maximum without convergence
+  if (debug_) {
+    std::ostringstream oss;
+    oss << "  Hit max iterations (" << ABSOLUTE_MAX
+        << ") without convergence";
+    debugLog(oss.str());
   }
 }
 

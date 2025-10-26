@@ -79,6 +79,9 @@ public:
 private:
   void execTensorEquation(const TensorEquation &eq);
   void execQuery(const Query &q);
+  void executeFixedPointLoop(const FixedPointLoop &loop);
+  TensorEquation substituteVirtualIndex(const TensorEquation &eq, int concreteTimeStep);
+  void substituteVirtualIndexInExpr(Expr &expr, int concreteTimeStep);
   void initializeExecutors();
   void initializePreprocessors();
 

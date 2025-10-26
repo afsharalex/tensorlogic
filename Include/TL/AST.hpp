@@ -101,6 +101,12 @@ struct TensorEquation {
     SourceLocation loc{};
 };
 
+    struct FixedPointLoop {
+        TensorEquation equation; // The self-recursive equation
+        std::string monitoredTensor; // Tensor to check for convergence (e.g. "x")
+        SourceLocation loc;
+    };
+
 struct FileOperation {
     // Either tensor = file("path") or file("path") = tensor
     // We normalize into lhsIsTensor flag
@@ -128,7 +134,7 @@ struct DatalogCondition { ExprPtr lhs; std::string op; ExprPtr rhs; SourceLocati
 
 struct DatalogRule { DatalogAtom head; std::vector<std::variant<DatalogAtom, DatalogCondition>> body; SourceLocation loc{}; };
 
-using Statement = std::variant<TensorEquation, FileOperation, Query, DatalogFact, DatalogRule>;
+using Statement = std::variant<TensorEquation, FileOperation, Query, DatalogFact, DatalogRule, FixedPointLoop>;
 
 struct Program {
     std::vector<Statement> statements;
