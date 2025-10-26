@@ -193,6 +193,7 @@ namespace tl {
             return torch::tensor(data).reshape(shape);
         }
 
+        // TODO: Clean this up with a map str->torch::func
         // Handle function calls
         if (const auto* call = std::get_if<ExprCall>(&e.node)) {
             auto need1 = [&](const char* fname) {
