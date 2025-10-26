@@ -969,6 +969,7 @@ int VirtualIndexPreprocessor::getIterationCount(const std::string& indexName, co
         }
     }
 
+    // TODO: We should handle this smarter.
     // If we can't find any tensor, try default of 10 or throw error
     return 10;
 }
