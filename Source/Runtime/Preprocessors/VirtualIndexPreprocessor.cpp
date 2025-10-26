@@ -136,6 +136,9 @@ struct DependencyGraph {
                 const auto& eq_i = equations[i];
                 const auto& eq_j = equations[j];
 
+                // Check if already found virtual index dependency
+                bool foundVirtualDep = false;
+
                 // Check if equation j depends on equation i via virtual indices
                 for (const auto& [key, offsets] : eq_j.rhsVirtualRefs) {
                     const auto& [tensorName, virtualIndexName] = key;
@@ -144,6 +147,7 @@ struct DependencyGraph {
                         for (int offset : offsets) {
                             if (offset == eq_i.lhsVirtualOffset) {
                                 adjList[i].push_back(j);
+                                foundVirtualDep = true;
                                 goto next_j;  // Found dependency, move to next j
                             }
                         }
@@ -152,10 +156,23 @@ struct DependencyGraph {
 
                 // Also check for regular (non-virtual) tensor dependencies
                 // If j's RHS uses i's LHS tensor (without virtual indices), it still depends on i
-                // We need to check if j's equation references i's LHS tensor name
                 // This is especially important for RHS-only equations
-                if (referencesTensor(eq_j.eq, eq_i.lhsTensorName)) {
-                    adjList[i].push_back(j);
+                // IMPORTANT: Skip if j already has a virtual index reference to i's tensor
+                // (those dependencies are handled by the virtual index check above)
+                if (!foundVirtualDep) {
+                    bool hasVirtualRefToI = false;
+                    for (const auto& [key, offsets] : eq_j.rhsVirtualRefs) {
+                        const auto& [tensorName, virtualIndexName] = key;
+                        if (tensorName == eq_i.lhsTensorName) {
+                            hasVirtualRefToI = true;
+                            break;
+                        }
+                    }
+
+                    // Only add dependency if j references i without virtual indices
+                    if (!hasVirtualRefToI && referencesTensor(eq_j.eq, eq_i.lhsTensorName)) {
+                        adjList[i].push_back(j);
+                    }
                 }
 
                 next_j:;
