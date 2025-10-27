@@ -2,6 +2,7 @@
 #include "TL/Runtime/ExecutorUtils.hpp"
 #include "TL/vm.hpp"
 #include <torch/torch.h>
+#include <algorithm>
 
 namespace tl {
 
@@ -192,6 +193,7 @@ namespace tl {
             return torch::tensor(data).reshape(shape);
         }
 
+        // TODO: Clean this up with a map str->torch::func
         // Handle function calls
         if (const auto* call = std::get_if<ExprCall>(&e.node)) {
             auto need1 = [&](const char* fname) {
@@ -234,6 +236,34 @@ namespace tl {
                 if (x.dim() == 0) return torch::tensor(1.0f);
                 int64_t dim = std::max<int64_t>(0, x.dim() - 1);
                 return torch::softmax(x, dim);
+            } else if (call->func.name == "cos") {
+                need1("cos");
+                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+                return torch::cos(x);
+            } else if (call->func.name == "sin") {
+                need1("sin");
+                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+                return torch::sin(x);
+            } else if (call->func.name == "tan") {
+                need1("tan");
+                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+                return torch::tan(x);
+            } else if (call->func.name == "acos") {
+                need1("acos");
+                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+                return torch::acos(x);
+            } else if (call->func.name == "asin") {
+                need1("asin");
+                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+                return torch::asin(x);
+            } else if (call->func.name == "atan") {
+                need1("atan");
+                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+                return torch::atan(x);
+            } else if (call->func.name == "log") {
+                need1("log");
+                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
+                return torch::log(x);
             }
 
             throw ExecutionError("Unsupported function: " + call->func.name);
@@ -270,6 +300,97 @@ namespace tl {
             Tensor a = evalExpr(bin->lhs, lhsCtx, env, backend);
             Tensor b = evalExpr(bin->rhs, lhsCtx, env, backend);
 
+            // Special handling for multiplication: if left operand was an indexed tensor reference
+            // and the result would have more dimensions than the LHS context expects,
+            // try to construct an einsum to contract over the extra dimensions
+            if (bin->op == Op::Mul) {
+                // Check if left operand is a simple tensor reference with free indices
+                const auto* leftRef = executor_utils::asExprTensorRef(bin->lhs);
+                if (leftRef) {
+                    // Collect free variable indices from left operand
+                    std::vector<std::string> leftIndices;
+                    for (const auto& idx : leftRef->ref.indices) {
+                        if (const auto* id = std::get_if<Identifier>(&idx.value)) {
+                            leftIndices.push_back(id->name);
+                        }
+                    }
+
+                    // Collect free variable indices from LHS context
+                    std::vector<std::string> outIndices;
+                    for (const auto& idx : lhsCtx.indices) {
+                        if (const auto* id = std::get_if<Identifier>(&idx.value)) {
+                            outIndices.push_back(id->name);
+                        }
+                    }
+
+                    // If we have indexed operations and dimensions match what we'd expect from einsum
+                    if (!leftIndices.empty() && a.dim() == static_cast<int64_t>(leftIndices.size()) &&
+                        b.dim() > 0) {
+                        // Try to construct einsum string
+                        // Left tensor has dimensions corresponding to leftIndices
+                        // Right tensor dimensions should map to indices that appear in leftIndices but not outIndices
+                        // (those are the contraction indices)
+
+                        // Build index mapping
+                        static const std::string pool = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+                        std::unordered_map<std::string, char> labelMap;
+                        size_t nextChar = 0;
+
+                        // Map left indices
+                        std::string leftSpec;
+                        for (const auto& idx : leftIndices) {
+                            if (labelMap.find(idx) == labelMap.end()) {
+                                if (nextChar >= pool.size()) goto fallback_multiply;
+                                labelMap[idx] = pool[nextChar++];
+                            }
+                            leftSpec += labelMap[idx];
+                        }
+
+                        // Map output indices
+                        std::string outSpec;
+                        for (const auto& idx : outIndices) {
+                            if (labelMap.find(idx) == labelMap.end()) {
+                                if (nextChar >= pool.size()) goto fallback_multiply;
+                                labelMap[idx] = pool[nextChar++];
+                            }
+                            outSpec += labelMap[idx];
+                        }
+
+                        // Right tensor: figure out its indices
+                        // It should have dimensions for indices that appear in leftIndices but not in outIndices
+                        std::string rightSpec;
+                        for (const auto& idx : leftIndices) {
+                            // Only include indices not in output (these get contracted)
+                            if (std::find(outIndices.begin(), outIndices.end(), idx) == outIndices.end()) {
+                                rightSpec += labelMap[idx];
+                            }
+                        }
+
+                        // Check if dimensions match and validate einsum indices
+                        if (!rightSpec.empty() && b.dim() == static_cast<int64_t>(rightSpec.size())) {
+                            // IMPORTANT: Validate that all output indices appear in at least one input
+                            // Without this check, we could generate invalid einsum specs like "ab,b->c"
+                            // where 'c' doesn't appear in any input operand
+                            bool validEinsum = true;
+                            for (char c : outSpec) {
+                                if (leftSpec.find(c) == std::string::npos && rightSpec.find(c) == std::string::npos) {
+                                    validEinsum = false;
+                                    break;
+                                }
+                            }
+
+                            if (validEinsum) {
+                                // Construct and execute einsum
+                                std::string spec = leftSpec + "," + rightSpec + "->" + outSpec;
+                                std::vector<Tensor> inputs = {a, b};
+                                return backend.einsum(spec, inputs);
+                            }
+                        }
+                    }
+                }
+            }
+
+            fallback_multiply:
             // Apply operation
             switch (bin->op) {
                 case Op::Add:

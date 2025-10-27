@@ -83,7 +83,37 @@ private:
 
     Index parseIndex() {
         Index idx; idx.loc = tok_.loc;
-        if (tok_.type == Token::Identifier) {
+        // Check for virtual index: *identifier [+/-offset] or *integer
+        if (tok_.type == Token::Star) {
+            SourceLocation loc = tok_.loc;
+            advance(); // consume '*'
+            Identifier id;
+            if (tok_.type == Token::Identifier) {
+                id = parseIdentifier();
+            } else if (tok_.type == Token::Integer) {
+                // Allow *N syntax for queries (e.g., avg[*5] means "at virtual time 5")
+                NumberLiteral num = parseNumber();
+                id = Identifier{num.text, num.loc};
+            } else {
+                errorHere("identifier or integer expected after '*' in virtual index");
+            }
+            int offset = 0;
+            // Check for +N or -N offset
+            if (tok_.type == Token::Plus) {
+                advance();
+                if (tok_.type != Token::Integer) errorHere("integer expected after '+' in virtual index");
+                NumberLiteral num = parseNumber();
+                offset = std::stoi(num.text);
+            } else if (tok_.type == Token::Minus) {
+                advance();
+                if (tok_.type != Token::Integer) errorHere("integer expected after '-' in virtual index");
+                NumberLiteral num = parseNumber();
+                offset = -std::stoi(num.text);
+            }
+            VirtualIndex vidx{std::move(id), offset, loc};
+            idx.value = std::move(vidx);
+            idx.loc = loc;
+        } else if (tok_.type == Token::Identifier) {
             auto id = parseIdentifier();
             // Support simple division in index like i/2 used for pooling strides
             if (tok_.type == Token::Slash) {
@@ -102,7 +132,7 @@ private:
         } else if (tok_.type == Token::Integer) {
             idx.value = parseNumber();
         } else {
-            errorHere("index (identifier or integer) expected");
+            errorHere("index (identifier, integer, or virtual index) expected");
         }
         return idx;
     }

@@ -38,6 +38,7 @@ add_executable(tl
     Source/Runtime/Executors/PoolingExecutor.cpp
     Source/Runtime/Executors/GuardedClauseExecutor.cpp
     Source/Runtime/Executors/ExpressionExecutor.cpp
+    Source/Runtime/Preprocessors/VirtualIndexPreprocessor.cpp
 )
 
 target_include_directories(tl PRIVATE
@@ -84,6 +85,8 @@ add_executable(tl_tests
     Source/Runtime/Executors/PoolingExecutor.cpp
     Source/Runtime/Executors/GuardedClauseExecutor.cpp
     Source/Runtime/Executors/ExpressionExecutor.cpp
+    Source/Runtime/Preprocessors/VirtualIndexPreprocessor.cpp
+        Tests/Unit/test_virtual_indexing.cpp
 )
 
 target_include_directories(tl_tests PRIVATE

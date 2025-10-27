@@ -495,6 +495,47 @@ IMPORTANT SEMANTIC RULES:
     Reserved words: not, and, or, true, false, True, False
     (Note: ! and ¬ are operators, not keywords)
 
+18. IDENTIFIER CASE SEMANTICS - TENSOR INDEXING:
+        Identifiers in tensor indices have different semantics based on their case:
+
+        a) UPPERCASE IDENTIFIERS (Labels/Constants):
+           - Start with uppercase letter (A-Z)
+           - Treated as concrete symbolic labels that are interned to integer indices
+           - Used for entity embedding and neurosymbolic reasoning
+           - Each unique label gets a unique integer index (0, 1, 2, ...)
+           - Examples:
+             * Emb[Alice, 0] = 0.8    // Alice is a label, interned to index 0
+             * Emb[Bob, 0] = 0.7      // Bob is a label, interned to index 1
+             * Sim[x, y] = Emb[x, d] Emb[y, d]  // x, y are free variables
+
+        b) LOWERCASE IDENTIFIERS (Free Variables):
+           - Start with lowercase letter (a-z)
+           - Treated as bound variables following Einstein summation convention
+           - Represent iteration over all values in a dimension
+           - Used for standard tensor operations and contractions
+           - Examples:
+             * Y[i] = W[i, j] X[j]    // i, j are free variables
+             * State[i, 0] = State_next[i]  // i iterates over dimension
+
+        c) NUMERIC LITERALS (Concrete Indices):
+           - Plain integers (0, 1, 2, ...)
+           - Direct array indexing into specific positions
+           - Examples:
+             * W[0, 1] = 0.5          // Index row 0, column 1
+             * State[i, 0] = ...      // i varies, second dim fixed at 0
+
+        USAGE GUIDELINES:
+        - Use UPPERCASE for entity names, symbolic constants, and labels
+        - Use lowercase for Einstein indices, loop variables, and contractions
+        - Use numerics for concrete positions and slicing
+        - Mixed indices are allowed: Emb[Alice, 0] uses both label and numeric
+
+        IMPLEMENTATION NOTES:
+        - Uppercase labels are mapped to integers via Environment::internLabel()
+        - Assignment with all uppercase/numeric indices handled by ScalarAssignExecutor
+        - Assignment with lowercase free variables handled by VM indexed assignment
+        - This distinction enables hybrid neurosymbolic reasoning
+
 *)
 
 (* ========================================

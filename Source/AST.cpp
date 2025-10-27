@@ -6,8 +6,18 @@ namespace tl {
 std::string toString(const Identifier& id) { return id.name; }
 
 static std::string indexToString(const Index& idx) {
-    if (std::holds_alternative<Identifier>(idx.value)) return std::get<Identifier>(idx.value).name;
-    return std::get<NumberLiteral>(idx.value).text;
+    if (std::holds_alternative<Identifier>(idx.value)) {
+        return std::get<Identifier>(idx.value).name;
+    } else if (std::holds_alternative<NumberLiteral>(idx.value)) {
+        return std::get<NumberLiteral>(idx.value).text;
+    } else {
+        // VirtualIndex
+        const auto& vidx = std::get<VirtualIndex>(idx.value);
+        std::string result = "*" + vidx.name.name;
+        if (vidx.offset > 0) result += "+" + std::to_string(vidx.offset);
+        else if (vidx.offset < 0) result += std::to_string(vidx.offset);
+        return result;
+    }
 }
 
 std::string toString(const TensorRef& ref) {
@@ -142,6 +152,19 @@ std::string toString(const Statement& st) {
             for (size_t i = 0; i < r.body.size(); ++i) {
                 if (i) oss << ',';
                 oss << bodyElemToString(r.body[i]);
+            }
+            return oss.str();
+        }
+        std::string operator()(const FixedPointLoop& loop) const {
+            std::ostringstream oss;
+            oss << "FixedPointLoop(" << loop.monitoredTensor << "): ";
+            oss << toString(loop.equation.lhs) << " " << loop.equation.projection << " ";
+            for (size_t i = 0; i < loop.equation.clauses.size(); ++i) {
+                if (i) oss << " | ";
+                oss << toString(*loop.equation.clauses[i].expr);
+                if (loop.equation.clauses[i].guard) {
+                    oss << " : " << toString(**loop.equation.clauses[i].guard);
+                }
             }
             return oss.str();
         }
