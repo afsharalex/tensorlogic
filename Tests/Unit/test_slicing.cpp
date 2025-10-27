@@ -218,3 +218,42 @@ TEST_CASE("Negative indices in slicing", "[slice][negative]") {
     REQUIRE_THAT(getTensorValue(Y, {0}), WithinAbs(3.0f, 0.001f));
     REQUIRE_THAT(getTensorValue(Y, {1}), WithinAbs(4.0f, 0.001f));
 }
+
+TEST_CASE("Slice with ::step (omit start and end)", "[slice][step]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+    auto prog = parseProgram(R"(
+        X = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        Y = X[::3]
+    )");
+    vm.execute(prog);
+
+    auto Y = vm.env().lookup("Y");
+    // Y should be [1, 4, 7, 10] (every 3rd element from entire array)
+    REQUIRE(Y.dim() == 1);
+    REQUIRE(Y.size(0) == 4);
+    REQUIRE_THAT(getTensorValue(Y, {0}), WithinAbs(1.0f, 0.001f));
+    REQUIRE_THAT(getTensorValue(Y, {1}), WithinAbs(4.0f, 0.001f));
+    REQUIRE_THAT(getTensorValue(Y, {2}), WithinAbs(7.0f, 0.001f));
+    REQUIRE_THAT(getTensorValue(Y, {3}), WithinAbs(10.0f, 0.001f));
+}
+
+TEST_CASE("Slice with start::step (omit end)", "[slice][step]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+    auto prog = parseProgram(R"(
+        X = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        Y = X[1::2]
+    )");
+    vm.execute(prog);
+
+    auto Y = vm.env().lookup("Y");
+    // Y should be [2, 4, 6, 8, 10] (every 2nd element starting from index 1)
+    REQUIRE(Y.dim() == 1);
+    REQUIRE(Y.size(0) == 5);
+    REQUIRE_THAT(getTensorValue(Y, {0}), WithinAbs(2.0f, 0.001f));
+    REQUIRE_THAT(getTensorValue(Y, {1}), WithinAbs(4.0f, 0.001f));
+    REQUIRE_THAT(getTensorValue(Y, {2}), WithinAbs(6.0f, 0.001f));
+    REQUIRE_THAT(getTensorValue(Y, {3}), WithinAbs(8.0f, 0.001f));
+    REQUIRE_THAT(getTensorValue(Y, {4}), WithinAbs(10.0f, 0.001f));
+}

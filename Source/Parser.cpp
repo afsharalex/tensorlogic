@@ -137,15 +137,22 @@ private:
         return idx;
     }
 
-    // Parse a slice: start:end:step, :end, start:, :, or just an integer/identifier
+    // Parse a slice: start:end:step, :end, start:, :, ::step, start::step, or just an integer/identifier
     Slice parseSlice() {
         Slice slice;
         slice.loc = tok_.loc;
 
-        // Check for leading colon (: or :end forms)
+        // Check for leading colon (: or :end or ::step forms)
         if (tok_.type == Token::Colon) {
-            advance(); // consume ':'
-            // Check if there's an end value
+            advance(); // consume first ':'
+            // Check if there's another colon immediately (::step form)
+            if (tok_.type == Token::Colon) {
+                advance(); // consume second ':'
+                if (tok_.type != Token::Integer) errorHere("integer expected for step in slice");
+                slice.step = parseNumber();
+                return slice;
+            }
+            // Check if there's an end value (:end or :end:step forms)
             if (tok_.type == Token::Integer) {
                 slice.end = parseNumber();
                 // Check for step (:end:step)
@@ -166,10 +173,17 @@ private:
 
         slice.start = parseNumber();
 
-        // Check for colon to continue slice (start: or start:end or start:end:step)
+        // Check for colon to continue slice (start: or start:end or start:end:step or start::step)
         if (tok_.type == Token::Colon) {
-            advance(); // consume ':'
-            // Check if there's an end value
+            advance(); // consume first ':'
+            // Check if there's another colon immediately (start::step form)
+            if (tok_.type == Token::Colon) {
+                advance(); // consume second ':'
+                if (tok_.type != Token::Integer) errorHere("integer expected for step in slice");
+                slice.step = parseNumber();
+                return slice;
+            }
+            // Check if there's an end value (start:end or start:end:step forms)
             if (tok_.type == Token::Integer) {
                 slice.end = parseNumber();
                 // Check for step (start:end:step)
