@@ -86,6 +86,12 @@ struct DatalogAtom {
     SourceLocation loc{};
 };
 
+// Negated Datalog atom: represents `not Atom(...)` in rule/query bodies
+struct DatalogNegation {
+    DatalogAtom atom;
+    SourceLocation loc{};
+};
+
 // Guarded clause: expression with optional guard condition
 struct GuardedClause {
     ExprPtr expr;                  // The expression to evaluate
@@ -124,7 +130,7 @@ struct Query {
     // Additionally, for Datalog queries, we may allow a conjunction of atoms and comparisons.
     std::variant<TensorRef, DatalogAtom> target;
     // If non-empty, represents a conjunctive query of atoms/conditions; the first element is usually the same as `target` when `target` holds a DatalogAtom.
-    std::vector<std::variant<DatalogAtom, DatalogCondition>> body;
+    std::vector<std::variant<DatalogAtom, DatalogNegation, DatalogCondition>> body;
     SourceLocation loc{};
 };
 
@@ -132,7 +138,7 @@ struct DatalogFact { Identifier relation; std::vector<StringLiteral> constants; 
 
 struct DatalogCondition { ExprPtr lhs; std::string op; ExprPtr rhs; SourceLocation loc{}; };
 
-struct DatalogRule { DatalogAtom head; std::vector<std::variant<DatalogAtom, DatalogCondition>> body; SourceLocation loc{}; };
+struct DatalogRule { DatalogAtom head; std::vector<std::variant<DatalogAtom, DatalogNegation, DatalogCondition>> body; SourceLocation loc{}; };
 
 using Statement = std::variant<TensorEquation, FileOperation, Query, DatalogFact, DatalogRule, FixedPointLoop>;
 

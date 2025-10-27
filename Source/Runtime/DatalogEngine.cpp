@@ -61,25 +61,52 @@ void DatalogEngine::saturate() {
 }
 
 size_t DatalogEngine::applyRule(const DatalogRule& rule) {
-    // Collect body atoms and conditions
+    // Collect body atoms, negations and conditions
     std::vector<DatalogAtom> bodyAtoms;
+    std::vector<DatalogNegation> negations;
     std::vector<DatalogCondition> conditions;
     bodyAtoms.reserve(rule.body.size());
     for (const auto& el : rule.body) {
         if (const auto* a = std::get_if<DatalogAtom>(&el)) bodyAtoms.push_back(*a);
+        else if (const auto* n = std::get_if<DatalogNegation>(&el)) negations.push_back(*n);
         else if (const auto* c = std::get_if<DatalogCondition>(&el)) conditions.push_back(*c);
     }
     if (bodyAtoms.empty()) return 0;
 
     size_t newCount = 0;
 
-    // Depth-first join over body atoms
+    auto hasMatch = [&](const DatalogAtom& a, const std::unordered_map<std::string, std::string>& binding) -> bool {
+        const auto& tuples = env_.facts(a.relation.name);
+        for (const auto& tup : tuples) {
+            if (tup.size() != a.terms.size()) continue;
+            bool ok = true;
+            for (size_t i = 0; i < a.terms.size(); ++i) {
+                const auto& term = a.terms[i];
+                const std::string& val = tup[i];
+                if (std::holds_alternative<StringLiteral>(term)) {
+                    if (std::get<StringLiteral>(term).text != val) { ok = false; break; }
+                } else {
+                    const std::string& vn = std::get<Identifier>(term).name;
+                    auto it = binding.find(vn);
+                    if (it != binding.end() && it->second != val) { ok = false; break; }
+                }
+            }
+            if (ok) return true;
+        }
+        return false;
+    };
+
+    // Depth-first join over positive body atoms
     std::unordered_map<std::string, std::string> binding;
     std::function<void(size_t)> dfs = [&](size_t idx) {
         if (idx == bodyAtoms.size()) {
             // Evaluate conditions as filters
             for (const auto& cond : conditions) {
                 if (!evalCondition(cond, binding)) return; // reject this binding
+            }
+            // Evaluate negations: all must have no match
+            for (const auto& neg : negations) {
+                if (hasMatch(neg.atom, binding)) return; // reject if negated atom holds
             }
             // Build head tuple
             std::vector<std::string> headTuple;
@@ -150,16 +177,18 @@ void DatalogEngine::query(const Query& q, std::ostream& out) {
 }
 
 void DatalogEngine::execDatalogQuery(const DatalogAtom& atom,
-                                     const std::vector<std::variant<DatalogAtom, DatalogCondition>>& body,
+                                     const std::vector<std::variant<DatalogAtom, DatalogNegation, DatalogCondition>>& body,
                                      std::ostream& out) {
     // If this is a conjunctive Datalog query with optional comparisons, evaluate via join
     if (!body.empty()) {
-        // Separate atoms and conditions
+        // Separate atoms, negations, and conditions
         std::vector<DatalogAtom> atoms;
+        std::vector<DatalogNegation> negs;
         std::vector<DatalogCondition> conditions;
         atoms.reserve(body.size());
         for (const auto& el : body) {
             if (const auto* a = std::get_if<DatalogAtom>(&el)) atoms.push_back(*a);
+            else if (const auto* n = std::get_if<DatalogNegation>(&el)) negs.push_back(*n);
             else if (const auto* c = std::get_if<DatalogCondition>(&el)) conditions.push_back(*c);
         }
         if (atoms.empty()) {
@@ -170,7 +199,7 @@ void DatalogEngine::execDatalogQuery(const DatalogAtom& atom,
         // Determine variable output order across atoms by first appearance
         std::vector<std::string> varNames;
         std::unordered_set<std::string> seen;
-        for (const auto& a : atoms) {
+        auto considerAtomVars = [&](const DatalogAtom& a){
             for (const auto& t : a.terms) {
                 if (const auto* id = std::get_if<Identifier>(&t)) {
                     const std::string& vn = id->name;
@@ -179,7 +208,30 @@ void DatalogEngine::execDatalogQuery(const DatalogAtom& atom,
                     }
                 }
             }
-        }
+        };
+        for (const auto& a : atoms) considerAtomVars(a);
+
+        // Helper to test if an atom has any matching tuple under current binding
+        auto hasMatch = [&](const DatalogAtom& a, const std::unordered_map<std::string, std::string>& binding) -> bool {
+            const auto& tuples = env_.facts(a.relation.name);
+            for (const auto& tup : tuples) {
+                if (tup.size() != a.terms.size()) continue;
+                bool ok = true;
+                for (size_t i = 0; i < a.terms.size(); ++i) {
+                    const auto& term = a.terms[i];
+                    const std::string& val = tup[i];
+                    if (std::holds_alternative<StringLiteral>(term)) {
+                        if (std::get<StringLiteral>(term).text != val) { ok = false; break; }
+                    } else {
+                        const std::string& vn = std::get<Identifier>(term).name;
+                        auto it = binding.find(vn);
+                        if (it != binding.end() && it->second != val) { ok = false; break; }
+                    }
+                }
+                if (ok) return true;
+            }
+            return false;
+        };
 
         // DFS join similar to rules
         std::unordered_map<std::string, std::string> binding;
@@ -190,6 +242,10 @@ void DatalogEngine::execDatalogQuery(const DatalogAtom& atom,
                 // Evaluate conditions
                 for (const auto& cond : conditions) {
                     if (!evalCondition(cond, binding)) return;
+                }
+                // Evaluate negations
+                for (const auto& n : negs) {
+                    if (hasMatch(n.atom, binding)) return;
                 }
                 if (varNames.empty()) {
                     out << "True" << std::endl;
@@ -382,6 +438,7 @@ bool DatalogEngine::evalExprBinding(const ExprPtr& e,
             case ExprBinary::Op::Sub: res = ln - rn; break;
             case ExprBinary::Op::Mul: res = ln * rn; break;
             case ExprBinary::Op::Div: if (rn == 0.0) return false; res = ln / rn; break;
+            default: return false;;
         }
         outNum = res; isNumeric = true;
         std::ostringstream oss; oss << res; outStr = oss.str();

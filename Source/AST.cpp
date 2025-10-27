@@ -141,8 +141,9 @@ std::string toString(const Statement& st) {
             oss << ')';
             return oss.str();
         }
-        static std::string bodyElemToString(const std::variant<DatalogAtom, DatalogCondition>& e) {
+        static std::string bodyElemToString(const std::variant<DatalogAtom, DatalogNegation, DatalogCondition>& e) {
             if (std::holds_alternative<DatalogAtom>(e)) return datalogAtomToString(std::get<DatalogAtom>(e));
+            if (std::holds_alternative<DatalogNegation>(e)) return std::string("not ") + datalogAtomToString(std::get<DatalogNegation>(e).atom);
             const auto& c = std::get<DatalogCondition>(e);
             return toString(*c.lhs) + " " + c.op + " " + toString(*c.rhs);
         }

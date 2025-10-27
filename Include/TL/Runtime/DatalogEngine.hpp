@@ -106,7 +106,7 @@ private:
      * @param out Output stream
      */
     void execDatalogQuery(const DatalogAtom& atom,
-                          const std::vector<std::variant<DatalogAtom, DatalogCondition>>& body,
+                          const std::vector<std::variant<DatalogAtom, DatalogNegation, DatalogCondition>>& body,
                           std::ostream& out);
 
     /**
