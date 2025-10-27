@@ -137,11 +137,112 @@ private:
         return idx;
     }
 
-    std::vector<Index> parseIndexList() {
-        std::vector<Index> v;
-        v.push_back(parseIndex());
+    // Parse a slice: start:end:step, :end, start:, :, or just an integer/identifier
+    Slice parseSlice() {
+        Slice slice;
+        slice.loc = tok_.loc;
+
+        // Check for leading colon (: or :end forms)
+        if (tok_.type == Token::Colon) {
+            advance(); // consume ':'
+            // Check if there's an end value
+            if (tok_.type == Token::Integer) {
+                slice.end = parseNumber();
+                // Check for step (:end:step)
+                if (tok_.type == Token::Colon) {
+                    advance(); // consume second ':'
+                    if (tok_.type != Token::Integer) errorHere("integer expected for step in slice");
+                    slice.step = parseNumber();
+                }
+            }
+            // else it's just ':', a full slice
+            return slice;
+        }
+
+        // Must start with integer (start:... or start)
+        if (tok_.type != Token::Integer) {
+            errorHere("slice must start with integer or ':'");
+        }
+
+        slice.start = parseNumber();
+
+        // Check for colon to continue slice (start: or start:end or start:end:step)
+        if (tok_.type == Token::Colon) {
+            advance(); // consume ':'
+            // Check if there's an end value
+            if (tok_.type == Token::Integer) {
+                slice.end = parseNumber();
+                // Check for step (start:end:step)
+                if (tok_.type == Token::Colon) {
+                    advance(); // consume second ':'
+                    if (tok_.type != Token::Integer) errorHere("integer expected for step in slice");
+                    slice.step = parseNumber();
+                }
+            }
+            // else it's start:, slice to end
+        }
+
+        return slice;
+    }
+
+    // Parse either an index or a slice
+    IndexOrSlice parseIndexOrSlice() {
+        IndexOrSlice ios;
+        ios.loc = tok_.loc;
+
+        // Lookahead: if we see a colon immediately, it's a slice
+        if (tok_.type == Token::Colon) {
+            ios.value = parseSlice();
+            return ios;
+        }
+
+        // If we see an integer followed by a colon, it's a slice
+        if (tok_.type == Token::Integer && toks_.peek().type == Token::Colon) {
+            ios.value = parseSlice();
+            return ios;
+        }
+
+        // Check for minus (negative slice bound)
+        if (tok_.type == Token::Minus && toks_.peek().type == Token::Integer) {
+            // This is a negative number, parse as slice
+            SourceLocation loc = tok_.loc;
+            advance(); // consume '-'
+            NumberLiteral num = parseNumber();
+            num.text = "-" + num.text; // Make it negative
+            num.loc = loc;
+
+            Slice slice;
+            slice.loc = loc;
+            slice.start = num;
+
+            // Check for colon continuation
+            if (tok_.type == Token::Colon) {
+                advance(); // consume ':'
+                if (tok_.type == Token::Integer || tok_.type == Token::Minus) {
+                    if (tok_.type == Token::Minus) {
+                        advance();
+                        NumberLiteral endNum = parseNumber();
+                        endNum.text = "-" + endNum.text;
+                        slice.end = endNum;
+                    } else {
+                        slice.end = parseNumber();
+                    }
+                }
+            }
+            ios.value = slice;
+            return ios;
+        }
+
+        // Otherwise, try to parse as a regular index
+        ios.value = parseIndex();
+        return ios;
+    }
+
+    std::vector<IndexOrSlice> parseIndexOrSliceList() {
+        std::vector<IndexOrSlice> v;
+        v.push_back(parseIndexOrSlice());
         while (accept(Token::Comma)) {
-            v.push_back(parseIndex());
+            v.push_back(parseIndexOrSlice());
         }
         return v;
     }
@@ -151,7 +252,7 @@ private:
         ref.name = parseIdentifier();
         if (accept(Token::LBracket)) {
             if (tok_.type != Token::RBracket) {
-                ref.indices = parseIndexList();
+                ref.indices = parseIndexOrSliceList();
             }
             expect(Token::RBracket, "]");
         }
@@ -246,7 +347,7 @@ private:
                 TensorRef ref; ref.loc = id.loc; ref.name = std::move(id);
                 if (accept(Token::LBracket)) {
                     if (tok_.type != Token::RBracket) {
-                        ref.indices = parseIndexList();
+                        ref.indices = parseIndexOrSliceList();
                     }
                     expect(Token::RBracket, "]");
                 }

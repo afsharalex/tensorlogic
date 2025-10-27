@@ -12,10 +12,13 @@ namespace tl {
 namespace {
 
 // Helper to check if an index list contains any virtual indices
-bool hasVirtualIndices(const std::vector<Index>& indices) {
-    for (const auto& idx : indices) {
-        if (std::holds_alternative<VirtualIndex>(idx.value)) {
-            return true;
+bool hasVirtualIndices(const std::vector<IndexOrSlice>& indices) {
+    for (const auto& ios : indices) {
+        if (std::holds_alternative<Index>(ios.value)) {
+            const auto& idx = std::get<Index>(ios.value);
+            if (std::holds_alternative<VirtualIndex>(idx.value)) {
+                return true;
+            }
         }
     }
     return false;
@@ -32,9 +35,12 @@ struct VirtualIndexCollector {
 
     void operator()(const ExprTensorRef& ref) {
         std::string tensorName = ref.ref.name.name;
-        for (const auto& idx: ref.ref.indices) {
-            if (auto* vid = std::get_if<VirtualIndex>(&idx.value)) {
-                tensorVirtualIndices[{tensorName, vid->name.name}].insert(vid->offset);
+        for (const auto& ios: ref.ref.indices) {
+            if (std::holds_alternative<Index>(ios.value)) {
+                const auto& idx = std::get<Index>(ios.value);
+                if (auto* vid = std::get_if<VirtualIndex>(&idx.value)) {
+                    tensorVirtualIndices[{tensorName, vid->name.name}].insert(vid->offset);
+                }
             }
         }
     }
@@ -85,10 +91,13 @@ static bool isSelfRecursiveEquation(const TensorEquation& eq, const std::string&
 
     // Check if LHS has virtual index
     bool lhsHasVirtual = false;
-    for (const auto& idx : eq.lhs.indices) {
-        if (auto* vid = std::get_if<VirtualIndex>(&idx.value)) {
-            lhsHasVirtual = true;
-            break;
+    for (const auto& ios : eq.lhs.indices) {
+        if (std::holds_alternative<Index>(ios.value)) {
+            const auto& idx = std::get<Index>(ios.value);
+            if (auto* vid = std::get_if<VirtualIndex>(&idx.value)) {
+                lhsHasVirtual = true;
+                break;
+            }
         }
     }
 
@@ -116,9 +125,12 @@ struct IndexCollector {
     }
 
     void operator()(const ExprTensorRef& ref) {
-        for (const auto& idx : ref.ref.indices) {
-            if (const auto* id = std::get_if<Identifier>(&idx.value)) {
-                indices.insert(id->name);
+        for (const auto& ios : ref.ref.indices) {
+            if (std::holds_alternative<Index>(ios.value)) {
+                const auto& idx = std::get<Index>(ios.value);
+                if (const auto* id = std::get_if<Identifier>(&idx.value)) {
+                    indices.insert(id->name);
+                }
             }
         }
     }
@@ -297,7 +309,12 @@ TensorRef substituteIndicesSSA(const TensorRef& ref,
                                bool isLHS) {
     TensorRef result = ref;
 
-    for (auto& idx : result.indices) {
+    for (auto& ios : result.indices) {
+        if (std::holds_alternative<tl::Slice>(ios.value)) {
+            // Slices pass through unchanged
+            continue;
+        }
+        auto& idx = std::get<Index>(ios.value);
         if (auto* vid = std::get_if<VirtualIndex>(&idx.value)) {
             // Replace virtual indices with 0
             // If virtualIndexName is empty, replace ALL virtual indices
@@ -310,7 +327,7 @@ TensorRef substituteIndicesSSA(const TensorRef& ref,
                 // Just mark it as 0 for now (we'll handle it differently)
                 NumberLiteral num;
                 num.text = "0";  // Placeholder
-                num.loc = idx.loc;
+                num.loc = ios.loc;
                 idx.value = num;
             }
         } else if (auto* id = std::get_if<Identifier>(&idx.value)) {
@@ -319,7 +336,7 @@ TensorRef substituteIndicesSSA(const TensorRef& ref,
             if (it != regularSubs.end()) {
                 NumberLiteral num;
                 num.text = std::to_string(it->second);
-                num.loc = idx.loc;
+                num.loc = ios.loc;
                 idx.value = num;
             }
         }
@@ -672,10 +689,16 @@ std::vector<Statement> VirtualIndexPreprocessor::preprocessBatch(const std::vect
                     writeEq.lhs.name.name = tempName;
 
                     // MODE B: Remove virtual indices entirely from temp tensors
-                    std::vector<Index> newIndices;
-                    for (auto& idx : writeEq.lhs.indices) {
-                        if (!std::holds_alternative<VirtualIndex>(idx.value)) {
-                            newIndices.push_back(idx);
+                    std::vector<IndexOrSlice> newIndices;
+                    for (auto& ios : writeEq.lhs.indices) {
+                        if (std::holds_alternative<Index>(ios.value)) {
+                            const auto& idx = std::get<Index>(ios.value);
+                            if (!std::holds_alternative<VirtualIndex>(idx.value)) {
+                                newIndices.push_back(ios);
+                            }
+                        } else {
+                            // Keep slices
+                            newIndices.push_back(ios);
                         }
                     }
                     writeEq.lhs.indices = newIndices;
@@ -714,12 +737,15 @@ std::vector<Statement> VirtualIndexPreprocessor::preprocessBatch(const std::vect
 
                 copyEq.lhs = info.eq.lhs;
                 // MODE B: Substitute virtual indices with 0 (main tensors keep the dimension)
-                for (auto& idx : copyEq.lhs.indices) {
-                    if (std::holds_alternative<VirtualIndex>(idx.value)) {
-                        NumberLiteral num;
-                        num.text = "0";
-                        num.loc = idx.loc;
-                        idx.value = num;
+                for (auto& ios : copyEq.lhs.indices) {
+                    if (std::holds_alternative<Index>(ios.value)) {
+                        auto& idx = std::get<Index>(ios.value);
+                        if (std::holds_alternative<VirtualIndex>(idx.value)) {
+                            NumberLiteral num;
+                            num.text = "0";
+                            num.loc = ios.loc;
+                            idx.value = num;
+                        }
                     }
                 }
 
@@ -728,10 +754,16 @@ std::vector<Statement> VirtualIndexPreprocessor::preprocessBatch(const std::vect
                 TensorRef readRef = info.eq.lhs;
                 readRef.name.name = tempName;
                 // MODE B: Remove virtual indices entirely from RHS read reference
-                std::vector<Index> newReadIndices;
-                for (auto& idx : readRef.indices) {
-                    if (!std::holds_alternative<VirtualIndex>(idx.value)) {
-                        newReadIndices.push_back(idx);
+                std::vector<IndexOrSlice> newReadIndices;
+                for (auto& ios : readRef.indices) {
+                    if (std::holds_alternative<Index>(ios.value)) {
+                        const auto& idx = std::get<Index>(ios.value);
+                        if (!std::holds_alternative<VirtualIndex>(idx.value)) {
+                            newReadIndices.push_back(ios);
+                        }
+                    } else {
+                        // Keep slices
+                        newReadIndices.push_back(ios);
                     }
                 }
                 readRef.indices = newReadIndices;
@@ -871,10 +903,16 @@ std::vector<Statement> VirtualIndexPreprocessor::preprocess(const Statement& st,
         TensorEquation writeEq = eq;
         writeEq.lhs.name.name = tempName;
         // MODE B: Remove virtual indices entirely from temp tensor LHS
-        std::vector<Index> newWriteIndices;
-        for (auto& idx : writeEq.lhs.indices) {
-            if (!std::holds_alternative<VirtualIndex>(idx.value)) {
-                newWriteIndices.push_back(idx);
+        std::vector<IndexOrSlice> newWriteIndices;
+        for (auto& ios : writeEq.lhs.indices) {
+            if (std::holds_alternative<Index>(ios.value)) {
+                const auto& idx = std::get<Index>(ios.value);
+                if (!std::holds_alternative<VirtualIndex>(idx.value)) {
+                    newWriteIndices.push_back(ios);
+                }
+            } else {
+                // Keep slices
+                newWriteIndices.push_back(ios);
             }
         }
         writeEq.lhs.indices = newWriteIndices;
@@ -897,12 +935,15 @@ std::vector<Statement> VirtualIndexPreprocessor::preprocess(const Statement& st,
         // LHS: original tensor at slot 0 (main tensors keep the dimension)
         copyEq.lhs = eq.lhs;
         // MODE B: Substitute virtual indices with 0 (main tensors keep the dimension)
-        for (auto& idx : copyEq.lhs.indices) {
-            if (std::holds_alternative<VirtualIndex>(idx.value)) {
-                NumberLiteral num;
-                num.text = "0";
-                num.loc = idx.loc;
-                idx.value = num;
+        for (auto& ios : copyEq.lhs.indices) {
+            if (std::holds_alternative<Index>(ios.value)) {
+                auto& idx = std::get<Index>(ios.value);
+                if (std::holds_alternative<VirtualIndex>(idx.value)) {
+                    NumberLiteral num;
+                    num.text = "0";
+                    num.loc = ios.loc;
+                    idx.value = num;
+                }
             }
         }
 
@@ -912,10 +953,16 @@ std::vector<Statement> VirtualIndexPreprocessor::preprocess(const Statement& st,
         TensorRef readRef = eq.lhs;
         readRef.name.name = tempName;
         // MODE B: Remove virtual indices entirely from copy-back RHS
-        std::vector<Index> newCopyRhsIndices;
-        for (auto& idx : readRef.indices) {
-            if (!std::holds_alternative<VirtualIndex>(idx.value)) {
-                newCopyRhsIndices.push_back(idx);
+        std::vector<IndexOrSlice> newCopyRhsIndices;
+        for (auto& ios : readRef.indices) {
+            if (std::holds_alternative<Index>(ios.value)) {
+                const auto& idx = std::get<Index>(ios.value);
+                if (!std::holds_alternative<VirtualIndex>(idx.value)) {
+                    newCopyRhsIndices.push_back(ios);
+                }
+            } else {
+                // Keep slices
+                newCopyRhsIndices.push_back(ios);
             }
         }
         readRef.indices = newCopyRhsIndices;
@@ -946,8 +993,11 @@ std::optional<std::pair<std::string, int>> VirtualIndexPreprocessor::getVirtualI
 std::vector<std::pair<std::string, int>> VirtualIndexPreprocessor::findVirtualIndices(const TensorRef& ref) {
     std::vector<std::pair<std::string, int>> result;
     for (size_t i = 0; i < ref.indices.size(); ++i) {
-        if (auto info = getVirtualIndexInfo(ref.indices[i])) {
-            result.push_back({info->first, info->second});
+        if (std::holds_alternative<Index>(ref.indices[i].value)) {
+            const auto& idx = std::get<Index>(ref.indices[i].value);
+            if (auto info = getVirtualIndexInfo(idx)) {
+                result.push_back({info->first, info->second});
+            }
         }
     }
     return result;
@@ -977,11 +1027,14 @@ int VirtualIndexPreprocessor::getIterationCount(const std::string& indexName, co
         }
 
         void operator()(const ExprTensorRef& ref) {
-            for (const auto& idx : ref.ref.indices) {
-                if (const auto* id = std::get_if<Identifier>(&idx.value)) {
-                    if (id->name == targetIndex) {
-                        candidates.push_back(ref.ref);
-                        return;
+            for (const auto& ios : ref.ref.indices) {
+                if (std::holds_alternative<Index>(ios.value)) {
+                    const auto& idx = std::get<Index>(ios.value);
+                    if (const auto* id = std::get_if<Identifier>(&idx.value)) {
+                        if (id->name == targetIndex) {
+                            candidates.push_back(ref.ref);
+                            return;
+                        }
                     }
                 }
             }
@@ -1014,10 +1067,13 @@ int VirtualIndexPreprocessor::getIterationCount(const std::string& indexName, co
 
                 int dimIdx = -1;
                 for (size_t i = 0; i < ref.indices.size(); ++i) {
-                    if (const auto* id = std::get_if<Identifier>(&ref.indices[i].value)) {
-                        if (id->name == indexName) {
-                            dimIdx = static_cast<int>(i);
-                            break;
+                    if (std::holds_alternative<Index>(ref.indices[i].value)) {
+                        const auto& idx = std::get<Index>(ref.indices[i].value);
+                        if (const auto* id = std::get_if<Identifier>(&idx.value)) {
+                            if (id->name == indexName) {
+                                dimIdx = static_cast<int>(i);
+                                break;
+                            }
                         }
                     }
                 }
@@ -1056,9 +1112,12 @@ void VirtualIndexPreprocessor::ensureMinimumVirtualSlots(const TensorEquation& e
 
     int virtualDim = -1;
     for (size_t i = 0; i < eq.lhs.indices.size(); ++i) {
-        if (std::holds_alternative<VirtualIndex>(eq.lhs.indices[i].value)) {
-            virtualDim = static_cast<int>(i);
-            break;
+        if (std::holds_alternative<Index>(eq.lhs.indices[i].value)) {
+            const auto& idx = std::get<Index>(eq.lhs.indices[i].value);
+            if (std::holds_alternative<VirtualIndex>(idx.value)) {
+                virtualDim = static_cast<int>(i);
+                break;
+            }
         }
     }
 

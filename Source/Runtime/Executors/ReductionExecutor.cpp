@@ -1,4 +1,5 @@
 #include "TL/Runtime/Executors/ReductionExecutor.hpp"
+#include "TL/Runtime/ExecutorUtils.hpp"
 #include "TL/vm.hpp"
 #include <torch/torch.h>
 
@@ -23,8 +24,23 @@ namespace tl {
         const auto *eref = std::get_if<ExprTensorRef>(&e.node);
         if (!eref) return false;
 
-        // RHS must have indices (otherwise it's just identity, not reduction)
-        return !eref->ref.indices.empty();
+        // RHS must have free variable indices (not just slices or concrete numbers)
+        // Slices and concrete indices are NOT reductions - they extract sub-tensors
+        if (eref->ref.indices.empty()) return false;
+
+        // Check if any RHS index is a free variable (Identifier)
+        for (const auto& ios : eref->ref.indices) {
+            if (std::holds_alternative<Index>(ios.value)) {
+                const auto& idx = std::get<Index>(ios.value);
+                if (std::holds_alternative<Identifier>(idx.value)) {
+                    // Found a free variable - this IS a reduction
+                    return true;
+                }
+            }
+        }
+
+        // Only has slices and/or concrete numbers - NOT a reduction
+        return false;
     }
 
     Tensor ReductionExecutor::execute(const TensorEquation &eq, Environment &env, TensorBackend &backend) {
@@ -51,13 +67,20 @@ namespace tl {
         using torch::indexing::TensorIndex;
         std::vector<TensorIndex> idx;
         idx.reserve(eref->ref.indices.size());
-        for (const auto& ind : eref->ref.indices) {
-            if (const auto* num = std::get_if<NumberLiteral>(&ind.value)) {
-                long long v = 0;
-                try { v = std::stoll(num->text); } catch (...) { v = 0; }
-                idx.emplace_back(static_cast<int64_t>(v));
+        for (const auto& ios : eref->ref.indices) {
+            if (std::holds_alternative<tl::Slice>(ios.value)) {
+                // Convert TL slice to PyTorch slice with proper bounds
+                const auto& tl_slice = std::get<tl::Slice>(ios.value);
+                idx.emplace_back(executor_utils::convertSlice(tl_slice));
             } else {
-                idx.emplace_back(Slice());
+                const auto& ind = std::get<Index>(ios.value);
+                if (const auto* num = std::get_if<NumberLiteral>(&ind.value)) {
+                    long long v = 0;
+                    try { v = std::stoll(num->text); } catch (...) { v = 0; }
+                    idx.emplace_back(static_cast<int64_t>(v));
+                } else {
+                    idx.emplace_back(Slice());
+                }
             }
         }
 

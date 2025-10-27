@@ -20,6 +20,29 @@ static std::string indexToString(const Index& idx) {
     }
 }
 
+static std::string sliceToString(const Slice& slice) {
+    std::ostringstream oss;
+    if (slice.start.has_value()) {
+        oss << slice.start->text;
+    }
+    oss << ":";
+    if (slice.end.has_value()) {
+        oss << slice.end->text;
+    }
+    if (slice.step.has_value()) {
+        oss << ":" << slice.step->text;
+    }
+    return oss.str();
+}
+
+static std::string indexOrSliceToString(const IndexOrSlice& ios) {
+    if (std::holds_alternative<Index>(ios.value)) {
+        return indexToString(std::get<Index>(ios.value));
+    } else {
+        return sliceToString(std::get<Slice>(ios.value));
+    }
+}
+
 std::string toString(const TensorRef& ref) {
     std::ostringstream oss;
     oss << ref.name.name;
@@ -27,7 +50,7 @@ std::string toString(const TensorRef& ref) {
         oss << "[";
         for (size_t i = 0; i < ref.indices.size(); ++i) {
             if (i) oss << ",";
-            oss << indexToString(ref.indices[i]);
+            oss << indexOrSliceToString(ref.indices[i]);
         }
         oss << "]";
     }
