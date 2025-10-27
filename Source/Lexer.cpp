@@ -55,6 +55,9 @@ namespace tl::lex {
     struct pipe   : pegtl::one<'|'> {};
     struct percent : pegtl::one<'%'> {};
     struct caret  : pegtl::one<'^'> {};
+    struct exclaim : pegtl::one<'!'> {};  // '!' for negation (not confused with != due to token order)
+    // '¬' is UTF-8: 0xC2 0xAC - use bytes directly
+    struct neg_symbol : pegtl::seq< pegtl::one<'\xC2'>, pegtl::one<'\xAC'> > {};
     struct larrow : pegtl::string<'<','-'> {};
 
     // Comparison operators
@@ -75,7 +78,8 @@ namespace tl::lex {
                 string_lit,
                 number,
                 identifier,
-                larrow, ge, le, eqeq, noteq, gt, lt,
+                larrow, ge, le, eqeq, noteq, gt, lt,  // noteq must come before exclaim
+                neg_symbol, exclaim,  // negation operators: ¬ and !
                 lbrack, rbrack, lparen, rparen, comma, equals, qmark, plus, minus, dot, slash, star,
                 colon, pipe, percent, caret,
                 unknown_char
@@ -187,6 +191,23 @@ namespace tl::lex {
     DEFINE_CHAR_TOKEN(pipe,   Token::Pipe,   '|')
     DEFINE_CHAR_TOKEN(percent, Token::Percent, '%')
     DEFINE_CHAR_TOKEN(caret,  Token::Caret,  '^')
+
+    // Negation operators: map both '!' and '¬' to KwNot
+    template<> struct action< exclaim > {
+        template< typename Input >
+        static void apply(const Input& in, TokenSink& sink) {
+            Token t; t.type = Token::KwNot; t.text = "!"; t.loc = locFrom(in.position());
+            sink.out.push_back(std::move(t));
+        }
+    };
+
+    template<> struct action< neg_symbol > {
+        template< typename Input >
+        static void apply(const Input& in, TokenSink& sink) {
+            Token t; t.type = Token::KwNot; t.text = "¬"; t.loc = locFrom(in.position());
+            sink.out.push_back(std::move(t));
+        }
+    };
 
     // multi-char '<-'
     template<> struct action< larrow > {

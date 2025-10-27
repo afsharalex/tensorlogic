@@ -488,9 +488,18 @@ private:
         DatalogCondition c; c.lhs = lhs; c.op = op; c.rhs = rhs; c.loc = lhs->loc; return c;
     }
 
-    std::variant<DatalogAtom, DatalogCondition> parseRuleBodyElement() {
+    std::variant<DatalogAtom, DatalogNegation, DatalogCondition> parseRuleBodyElement() {
         // Allow body elements to span lines
         skipNewlines();
+        // Handle negation keyword before an atom
+        if (tok_.type == Token::KwNot) {
+            advance();
+            skipNewlines();
+            DatalogNegation neg;
+            neg.atom = parseAtom();
+            neg.loc = neg.atom.loc;
+            return neg;
+        }
         // Decide based on lookahead: Uppercase Identifier followed by '(' means atom
         if (tok_.type == Token::Identifier && startsWithUpper(tok_.text) && toks_.peek().type == Token::LParen) {
             return parseAtom();
@@ -533,16 +542,16 @@ private:
                 Query q; q.target = head; q.loc = head.loc; return q;
             }
             if (accept(Token::LArrow)) {
-                // parse body: elements are either Atom or Condition (comparison of tensor expressions)
-                std::vector<std::variant<DatalogAtom, DatalogCondition>> body;
+                // parse body: elements are either Atom, Negation, or Condition (comparison of tensor expressions)
+                std::vector<std::variant<DatalogAtom, DatalogNegation, DatalogCondition>> body;
                 body.push_back(parseRuleBodyElement());
                 while (accept(Token::Comma)) body.push_back(parseRuleBodyElement());
                 DatalogRule r; r.head = std::move(head); r.body = std::move(body); r.loc = r.head.loc;
                 return r;
             }
-            // Datalog conjunctive query: Atom, (Atom|Condition) ... ?
+            // Datalog conjunctive query: Atom, (Atom|Negation|Condition) ... ?
             if (tok_.type == Token::Comma) {
-                std::vector<std::variant<DatalogAtom, DatalogCondition>> conj;
+                std::vector<std::variant<DatalogAtom, DatalogNegation, DatalogCondition>> conj;
                 // include the first atom
                 conj.push_back(head);
                 do {

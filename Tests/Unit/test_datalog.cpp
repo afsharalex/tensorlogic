@@ -264,3 +264,113 @@ TEST_CASE("Datalog - grandparent rule", "[datalog][rules]") {
     // Bob is grandparent of Eve
     REQUIRE(hasFact(vm.env(), "Grandparent", {"Bob", "Eve"}));
 }
+TEST_CASE("Datalog negation in rule body", "[datalog][rules][negation]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+
+    // People and one friendship (added in both directions for symmetry)
+    auto prog = parseProgram(R"(
+        Person(Alice)
+        Person(Bob)
+        Person(Charlie)
+        Friend(Alice, Bob)
+        Friend(Bob, Alice)
+
+        // NonFriend(x,y) holds when both are persons, distinct, and not friends
+        NonFriend(x, y) <- Person(x), Person(y), x != y, not Friend(x, y)
+
+        NonFriend(x, y)?
+    )");
+
+    vm.execute(prog);
+
+    // Alice and Bob are friends, so not included in NonFriend in either direction
+    REQUIRE_FALSE(hasFact(vm.env(), "NonFriend", {"Alice", "Bob"}));
+    REQUIRE_FALSE(hasFact(vm.env(), "NonFriend", {"Bob", "Alice"}));
+
+    // Pairs that are not friends should appear
+    REQUIRE(hasFact(vm.env(), "NonFriend", {"Alice", "Charlie"}));
+    REQUIRE(hasFact(vm.env(), "NonFriend", {"Charlie", "Alice"}));
+    REQUIRE(hasFact(vm.env(), "NonFriend", {"Bob", "Charlie"}));
+    REQUIRE(hasFact(vm.env(), "NonFriend", {"Charlie", "Bob"}));
+}
+
+TEST_CASE("Datalog negation in rule body '!'", "[datalog][rules][negation]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+
+    // People and one friendship (added in both directions for symmetry)
+    auto prog = parseProgram(R"(
+        Person(Alice)
+        Person(Bob)
+        Person(Charlie)
+        Friend(Alice, Bob)
+        Friend(Bob, Alice)
+
+        // NonFriend(x,y) holds when both are persons, distinct, and not friends
+        NonFriend(x, y) <- Person(x), Person(y), x != y, !Friend(x, y)
+
+        NonFriend(x, y)?
+    )");
+
+    vm.execute(prog);
+
+    // Alice and Bob are friends, so not included in NonFriend in either direction
+    REQUIRE_FALSE(hasFact(vm.env(), "NonFriend", {"Alice", "Bob"}));
+    REQUIRE_FALSE(hasFact(vm.env(), "NonFriend", {"Bob", "Alice"}));
+
+    // Pairs that are not friends should appear
+    REQUIRE(hasFact(vm.env(), "NonFriend", {"Alice", "Charlie"}));
+    REQUIRE(hasFact(vm.env(), "NonFriend", {"Charlie", "Alice"}));
+    REQUIRE(hasFact(vm.env(), "NonFriend", {"Bob", "Charlie"}));
+    REQUIRE(hasFact(vm.env(), "NonFriend", {"Charlie", "Bob"}));
+}
+
+TEST_CASE("Datalog negation in rule body '¬'", "[datalog][rules][negation]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+
+    // People and one friendship (added in both directions for symmetry)
+    auto prog = parseProgram(R"(
+        Person(Alice)
+        Person(Bob)
+        Person(Charlie)
+        Friend(Alice, Bob)
+        Friend(Bob, Alice)
+
+        // NonFriend(x,y) holds when both are persons, distinct, and not friends
+        NonFriend(x, y) <- Person(x), Person(y), x != y, ¬Friend(x, y)
+
+        NonFriend(x, y)?
+    )");
+
+    vm.execute(prog);
+
+    // Alice and Bob are friends, so not included in NonFriend in either direction
+    REQUIRE_FALSE(hasFact(vm.env(), "NonFriend", {"Alice", "Bob"}));
+    REQUIRE_FALSE(hasFact(vm.env(), "NonFriend", {"Bob", "Alice"}));
+
+    // Pairs that are not friends should appear
+    REQUIRE(hasFact(vm.env(), "NonFriend", {"Alice", "Charlie"}));
+    REQUIRE(hasFact(vm.env(), "NonFriend", {"Charlie", "Alice"}));
+    REQUIRE(hasFact(vm.env(), "NonFriend", {"Bob", "Charlie"}));
+    REQUIRE(hasFact(vm.env(), "NonFriend", {"Charlie", "Bob"}));
+}
+
+TEST_CASE("Datalog negation in conjunctive query", "[datalog][query][negation]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+
+    auto prog = parseProgram(R"(
+        Person(Alice)
+        Person(Bob)
+        Friend(Alice, Bob)
+        Friend(Bob, Alice)
+
+        // query: persons x,y that are not friends (should return None since both are friends)
+        Person(x), Person(y), x != y, not Friend(x, y)?
+    )");
+
+    // Should parse and execute without throwing; we don't assert specific output here
+    REQUIRE_NOTHROW(vm.execute(prog));
+}
