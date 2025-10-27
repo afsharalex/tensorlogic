@@ -385,9 +385,12 @@ void TensorLogicVM::execute(const Program &program) {
             debugLog(oss.str());
           }
         }
+      } else if (std::holds_alternative<Query>(preprocessed_st)) {
+        // Queries are processed in a separate loop after saturation (see line ~459)
+        // Do nothing here - not an error
       } else {
         // Unknown statement kind
-        if (debug_) debugLog("Skipping non-tensor statement (not yet implemented)");
+        if (debug_) debugLog("Warning: Unknown statement type, skipping");
       }
     } // end for each preprocessed statement
   } // end for each non-virtual statement
