@@ -42,6 +42,10 @@ public:
   bool hasRelation(const std::string &relation) const;
   const std::vector<std::vector<std::string>> &facts(const std::string &relation) const; // empty if missing
 
+  // Expose tensors and relations for introspection (e.g., REPL)
+  const std::unordered_map<std::string, Tensor> &tensors() const { return tensors_; }
+  const std::unordered_map<std::string, std::vector<std::vector<std::string>>> &relations() const { return datalog_; }
+
 private:
   std::unordered_map<std::string, Tensor> tensors_;
   // Global mapping from string labels (e.g., Alice) to stable integer indices for tensor axes.
