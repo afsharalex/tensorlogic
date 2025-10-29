@@ -67,6 +67,7 @@ add_executable(tl_tests
     Tests/Unit/test_neurosymbolic.cpp
     Tests/Unit/test_executors.cpp
     Tests/Unit/test_guarded_clauses.cpp
+    Tests/Unit/test_slicing.cpp
 
     # Source files needed for tests
     Source/Parser.cpp

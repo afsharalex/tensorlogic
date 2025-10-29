@@ -10,6 +10,7 @@
 #include "TL/Runtime/Executors/ExpressionExecutor.hpp"
 #include "TL/Runtime/Preprocessors/VirtualIndexPreprocessor.hpp"
 #include "TL/Runtime/DatalogEngine.hpp"
+#include "TL/Runtime/ExecutorUtils.hpp"
 
 #include <stdexcept>
 #include <torch/torch.h>
@@ -189,10 +190,14 @@ void TensorLogicVM::execute(const Program &program) {
       const auto& eq = std::get<TensorEquation>(st);
 
       // Check LHS for virtual indices
-      for (const auto& idx : eq.lhs.indices) {
-        if (std::holds_alternative<VirtualIndex>(idx.value)) {
-          isVirtualIndexed = true;
-          break;
+      for (const auto& ios : eq.lhs.indices) {
+        // Check if it's an Index (not a Slice), then check if it's a VirtualIndex
+        if (std::holds_alternative<Index>(ios.value)) {
+          const auto& idx = std::get<Index>(ios.value);
+          if (std::holds_alternative<VirtualIndex>(idx.value)) {
+            isVirtualIndexed = true;
+            break;
+          }
         }
       }
 
@@ -380,9 +385,12 @@ void TensorLogicVM::execute(const Program &program) {
             debugLog(oss.str());
           }
         }
+      } else if (std::holds_alternative<Query>(preprocessed_st)) {
+        // Queries are processed in a separate loop after saturation (see line ~459)
+        // Do nothing here - not an error
       } else {
         // Unknown statement kind
-        if (debug_) debugLog("Skipping non-tensor statement (not yet implemented)");
+        if (debug_) debugLog("Warning: Unknown statement type, skipping");
       }
     } // end for each preprocessed statement
   } // end for each non-virtual statement
@@ -470,7 +478,13 @@ static bool resolveConcreteIndices(const TensorRef& ref,
                                    std::vector<int64_t>& idxs,
                                    bool createLabels) {
   idxs.clear();
-  for (const auto& ix : ref.indices) {
+  for (const auto& ios : ref.indices) {
+    // Skip slices - only handle concrete Index values
+    if (!std::holds_alternative<Index>(ios.value)) {
+      return false;  // Has a slice, not fully concrete
+    }
+    const auto& ix = std::get<Index>(ios.value);
+
     if (const auto* num = std::get_if<NumberLiteral>(&ix.value)) {
       try {
         long long v = std::stoll(num->text);
@@ -523,7 +537,14 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
       bool allConcreteOrLabelIndices = true;
       bool hasFreeVariables = false;
 
-      for (const auto& idx : eq.lhs.indices) {
+      for (const auto& ios : eq.lhs.indices) {
+        // Slices are not concrete - require special handling
+        if (!std::holds_alternative<Index>(ios.value)) {
+          allConcreteOrLabelIndices = false;
+          break;
+        }
+        const auto& idx = std::get<Index>(ios.value);
+
         if (std::holds_alternative<NumberLiteral>(idx.value)) {
           // Concrete numeric index - OK for ScalarAssignExecutor
           continue;
@@ -564,18 +585,28 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
       std::vector<bool> isConcreteFlag;      // Track which positions are concrete
       bool hasConcreteIndex = false;
 
-      for (const auto& idx : eq.lhs.indices) {
-        if (const auto* num = std::get_if<NumberLiteral>(&idx.value)) {
-          long long v = std::stoll(num->text);
-          indices.push_back(static_cast<int64_t>(v));
-          concreteIndices.push_back(static_cast<int64_t>(v));
-          isConcreteFlag.push_back(true);
-          hasConcreteIndex = true;
-        } else if (std::holds_alternative<Identifier>(idx.value)) {
-          // Free variable - use slice to cover all values in that dimension
-          indices.push_back(torch::indexing::Slice());
-          concreteIndices.push_back(-1);  // Placeholder
-          isConcreteFlag.push_back(false);
+      for (const auto& ios : eq.lhs.indices) {
+        // Handle both Index and Slice
+        if (std::holds_alternative<Slice>(ios.value)) {
+          // Convert TL slice to PyTorch slice with proper bounds
+          const auto& tl_slice = std::get<Slice>(ios.value);
+          indices.push_back(executor_utils::convertSlice(tl_slice));
+          concreteIndices.push_back(-1);  // Placeholder (slices don't have a single concrete index)
+          isConcreteFlag.push_back(false);  // Slices are not concrete single indices
+        } else {
+          const auto& idx = std::get<Index>(ios.value);
+          if (const auto* num = std::get_if<NumberLiteral>(&idx.value)) {
+            long long v = std::stoll(num->text);
+            indices.push_back(static_cast<int64_t>(v));
+            concreteIndices.push_back(static_cast<int64_t>(v));
+            isConcreteFlag.push_back(true);
+            hasConcreteIndex = true;
+          } else if (std::holds_alternative<Identifier>(idx.value)) {
+            // Free variable - use slice to cover all values in that dimension
+            indices.push_back(torch::indexing::Slice());
+            concreteIndices.push_back(-1);  // Placeholder
+            isConcreteFlag.push_back(false);
+          }
         }
       }
 
@@ -673,13 +704,17 @@ void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
 // Recursive helper for expression substitution
 void TensorLogicVM::substituteVirtualIndexInExpr(Expr &expr, int concreteTimeStep) {
   if (auto *ref = std::get_if<ExprTensorRef>(&expr.node)) {
-    for (auto &idx : ref->ref.indices) {
-      if (auto *virt = std::get_if<VirtualIndex>(&idx.value)) {
-        int slot = concreteTimeStep + virt->offset;
-        NumberLiteral num;
-        num.text = std::to_string(slot);
-        num.loc = idx.loc;
-        idx.value = num;
+    for (auto &ios : ref->ref.indices) {
+      // Only substitute if it's an Index (not a Slice)
+      if (std::holds_alternative<Index>(ios.value)) {
+        auto &idx = std::get<Index>(ios.value);
+        if (auto *virt = std::get_if<VirtualIndex>(&idx.value)) {
+          int slot = concreteTimeStep + virt->offset;
+          NumberLiteral num;
+          num.text = std::to_string(slot);
+          num.loc = idx.loc;
+          idx.value = num;
+        }
       }
     }
   } else if (auto *bin = std::get_if<ExprBinary>(&expr.node)) {
@@ -706,13 +741,17 @@ TensorEquation TensorLogicVM::substituteVirtualIndex(const TensorEquation &eq, i
   TensorEquation result = eq;
 
   // Substitute LHS virtual indices
-  for (auto &idx : result.lhs.indices) {
-    if (auto *virt = std::get_if<VirtualIndex>(&idx.value)) {
-      int slot = concreteTimeStep + virt->offset;
-      NumberLiteral num;
-      num.text = std::to_string(slot);
-      num.loc = idx.loc;
-      idx.value = num;
+  for (auto &ios : result.lhs.indices) {
+    // Only substitute if it's an Index (not a Slice)
+    if (std::holds_alternative<Index>(ios.value)) {
+      auto &idx = std::get<Index>(ios.value);
+      if (auto *virt = std::get_if<VirtualIndex>(&idx.value)) {
+        int slot = concreteTimeStep + virt->offset;
+        NumberLiteral num;
+        num.text = std::to_string(slot);
+        num.loc = idx.loc;
+        idx.value = num;
+      }
     }
   }
 

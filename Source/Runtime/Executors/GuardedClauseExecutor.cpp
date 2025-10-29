@@ -34,9 +34,13 @@ namespace tl {
         if (!eq.lhs.indices.empty()) {
             // Extract index variable names from LHS
             std::vector<std::string> indexVars;
-            for (const auto& idx : eq.lhs.indices) {
-                if (const auto* id = std::get_if<Identifier>(&idx.value)) {
-                    indexVars.push_back(id->name);
+            for (const auto& ios : eq.lhs.indices) {
+                // Skip slices - they don't contribute to index variable names
+                if (std::holds_alternative<Index>(ios.value)) {
+                    const auto& idx = std::get<Index>(ios.value);
+                    if (const auto* id = std::get_if<Identifier>(&idx.value)) {
+                        indexVars.push_back(id->name);
+                    }
                 }
             }
 

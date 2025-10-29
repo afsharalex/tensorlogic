@@ -42,9 +42,13 @@ namespace tl {
         // Build mapping from RHS index variable name -> axis position
         std::unordered_map<std::string, int64_t> rhsAxis;
         for (int64_t ax = 0; ax < static_cast<int64_t>(eref->ref.indices.size()); ++ax) {
-            const auto &idx = eref->ref.indices[ax];
-            if (const auto *id = std::get_if<Identifier>(&idx.value)) {
-                rhsAxis[id->name] = ax;
+            const auto &ios = eref->ref.indices[ax];
+            // Skip slices - they don't contribute to variable mapping
+            if (std::holds_alternative<Index>(ios.value)) {
+                const auto &idx = std::get<Index>(ios.value);
+                if (const auto *id = std::get_if<Identifier>(&idx.value)) {
+                    rhsAxis[id->name] = ax;
+                }
             }
         }
 
@@ -71,22 +75,30 @@ namespace tl {
             return {base, div};
         };
 
-        for (const auto &idx : eq.lhs.indices) {
-            if (const auto *id = std::get_if<Identifier>(&idx.value)) {
-                auto [base, div] = parseDiv(id->name);
-                lhsMap.push_back({base, div});
-
-                auto it = rhsAxis.find(base);
-                int64_t size = 1;
-                if (it != rhsAxis.end()) {
-                    const int64_t inSize = src.size(it->second);
-                    size = (div <= 1) ? inSize : ((inSize + div - 1) / div);
-                }
-                outShape.push_back(size);
-            } else if (const auto *num = std::get_if<NumberLiteral>(&idx.value)) {
-                // Numeric fixed index contributes shape 1
-                outShape.push_back(1);
+        for (const auto &ios : eq.lhs.indices) {
+            if (std::holds_alternative<tl::Slice>(ios.value)) {
+                // Slice on LHS - treat as full dimension pass-through
+                // For pooling, this is unusual but we'll treat it as a variable with no division
                 lhsMap.push_back({"", 1});
+                outShape.push_back(1);
+            } else {
+                const auto &idx = std::get<Index>(ios.value);
+                if (const auto *id = std::get_if<Identifier>(&idx.value)) {
+                    auto [base, div] = parseDiv(id->name);
+                    lhsMap.push_back({base, div});
+
+                    auto it = rhsAxis.find(base);
+                    int64_t size = 1;
+                    if (it != rhsAxis.end()) {
+                        const int64_t inSize = src.size(it->second);
+                        size = (div <= 1) ? inSize : ((inSize + div - 1) / div);
+                    }
+                    outShape.push_back(size);
+                } else if (const auto *num = std::get_if<NumberLiteral>(&idx.value)) {
+                    // Numeric fixed index contributes shape 1
+                    outShape.push_back(1);
+                    lhsMap.push_back({"", 1});
+                }
             }
         }
 

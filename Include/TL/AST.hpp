@@ -39,9 +39,28 @@ struct Index {
     SourceLocation loc{};
 };
 
+// Slice for tensor slicing: start:end:step, :end, start:, :, etc.
+struct Slice {
+    std::optional<NumberLiteral> start;  // Empty means "from beginning"
+    std::optional<NumberLiteral> end;    // Empty means "to end"
+    std::optional<NumberLiteral> step;   // Empty means step=1
+    SourceLocation loc{};
+
+    // Check if this is a complete slice (:)
+    bool isFullSlice() const {
+        return !start.has_value() && !end.has_value() && !step.has_value();
+    }
+};
+
+// IndexOrSlice: either a regular index or a slice
+struct IndexOrSlice {
+    std::variant<Index, Slice> value;
+    SourceLocation loc{};
+};
+
 struct TensorRef {
     Identifier name;
-    std::vector<Index> indices; // empty means scalar
+    std::vector<IndexOrSlice> indices; // empty means scalar, can mix Index and Slice
     SourceLocation loc{};
 };
 

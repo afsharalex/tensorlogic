@@ -20,6 +20,29 @@ static std::string indexToString(const Index& idx) {
     }
 }
 
+static std::string sliceToString(const Slice& slice) {
+    std::ostringstream oss;
+    if (slice.start.has_value()) {
+        oss << slice.start->text;
+    }
+    oss << ":";
+    if (slice.end.has_value()) {
+        oss << slice.end->text;
+    }
+    if (slice.step.has_value()) {
+        oss << ":" << slice.step->text;
+    }
+    return oss.str();
+}
+
+static std::string indexOrSliceToString(const IndexOrSlice& ios) {
+    if (std::holds_alternative<Index>(ios.value)) {
+        return indexToString(std::get<Index>(ios.value));
+    } else {
+        return sliceToString(std::get<Slice>(ios.value));
+    }
+}
+
 std::string toString(const TensorRef& ref) {
     std::ostringstream oss;
     oss << ref.name.name;
@@ -27,7 +50,7 @@ std::string toString(const TensorRef& ref) {
         oss << "[";
         for (size_t i = 0; i < ref.indices.size(); ++i) {
             if (i) oss << ",";
-            oss << indexToString(ref.indices[i]);
+            oss << indexOrSliceToString(ref.indices[i]);
         }
         oss << "]";
     }
@@ -126,11 +149,33 @@ std::string toString(const Statement& st) {
             return oss.str();
         }
         std::string operator()(const Query& q) const {
-            if (std::holds_alternative<TensorRef>(q.target)) {
-                return toString(std::get<TensorRef>(q.target)) + "?";
+            std::ostringstream oss;
+
+            // For Datalog conjunctive queries, the first atom appears in both `target` and `body[0]`
+            // To avoid duplication, we print only the body if it's non-empty AND target is a DatalogAtom
+            if (std::holds_alternative<DatalogAtom>(q.target) && !q.body.empty()) {
+                // Print all body elements (which includes the target as first element)
+                for (size_t i = 0; i < q.body.size(); ++i) {
+                    if (i > 0) oss << ", ";
+                    oss << bodyElemToString(q.body[i]);
+                }
             } else {
-                return datalogAtomToString(std::get<DatalogAtom>(q.target)) + "?";
+                // Tensor query or simple query without conjunction
+                if (std::holds_alternative<TensorRef>(q.target)) {
+                    oss << toString(std::get<TensorRef>(q.target));
+                } else {
+                    oss << datalogAtomToString(std::get<DatalogAtom>(q.target));
+                }
+                // Print any additional body elements (shouldn't happen for tensor queries)
+                if (!q.body.empty()) {
+                    for (const auto& elem : q.body) {
+                        oss << ", " << bodyElemToString(elem);
+                    }
+                }
             }
+
+            oss << "?";
+            return oss.str();
         }
         std::string operator()(const DatalogFact& f) const {
             std::ostringstream oss; oss << f.relation.name << '(';

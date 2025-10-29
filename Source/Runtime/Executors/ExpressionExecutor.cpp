@@ -95,7 +95,12 @@ namespace tl {
         if (const auto* tr = std::get_if<ExprTensorRef>(&e.node)) {
             // Check if indices are bound variables (for guarded clause evaluation)
             bool hasBounden = false;
-            for (const auto& idx : tr->ref.indices) {
+            for (const auto& ios : tr->ref.indices) {
+                if (std::holds_alternative<tl::Slice>(ios.value)) {
+                    // Slices are not bound variables
+                    continue;
+                }
+                const auto& idx = std::get<Index>(ios.value);
                 if (const auto* id = std::get_if<Identifier>(&idx.value)) {
                     if (env.has(id->name)) {
                         hasBounden = true;
@@ -110,21 +115,27 @@ namespace tl {
                 if (tr->ref.indices.empty()) return base;
 
                 std::vector<torch::indexing::TensorIndex> indices;
-                for (const auto& idx : tr->ref.indices) {
-                    if (const auto* num = std::get_if<NumberLiteral>(&idx.value)) {
-                        long long v = 0;
-                        try { v = std::stoll(num->text); } catch (...) { v = 0; }
-                        indices.emplace_back(static_cast<int64_t>(v));
-                    } else if (const auto* id = std::get_if<Identifier>(&idx.value)) {
-                        // Check if bound in environment
-                        if (env.has(id->name)) {
-                            Tensor idxTensor = env.lookup(id->name);
-                            // Convert to integer index
-                            int64_t idxValue = static_cast<int64_t>(idxTensor.item<float>());
-                            indices.emplace_back(idxValue);
-                        } else {
-                            // Not bound, use as slice
-                            indices.emplace_back(torch::indexing::Slice());
+                for (const auto& ios : tr->ref.indices) {
+                    if (std::holds_alternative<tl::Slice>(ios.value)) {
+                        // TL slice - use full torch slice
+                        indices.emplace_back(torch::indexing::Slice());
+                    } else {
+                        const auto& idx = std::get<Index>(ios.value);
+                        if (const auto* num = std::get_if<NumberLiteral>(&idx.value)) {
+                            long long v = 0;
+                            try { v = std::stoll(num->text); } catch (...) { v = 0; }
+                            indices.emplace_back(static_cast<int64_t>(v));
+                        } else if (const auto* id = std::get_if<Identifier>(&idx.value)) {
+                            // Check if bound in environment
+                            if (env.has(id->name)) {
+                                Tensor idxTensor = env.lookup(id->name);
+                                // Convert to integer index
+                                int64_t idxValue = static_cast<int64_t>(idxTensor.item<float>());
+                                indices.emplace_back(idxValue);
+                            } else {
+                                // Not bound, use as slice
+                                indices.emplace_back(torch::indexing::Slice());
+                            }
                         }
                     }
                 }
@@ -278,7 +289,12 @@ namespace tl {
             if (bin->op == Op::Mul) {
                 // Check if any index variables in lhsCtx are bound
                 bool hasBoundIndices = false;
-                for (const auto& idx : lhsCtx.indices) {
+                for (const auto& ios : lhsCtx.indices) {
+                    if (std::holds_alternative<tl::Slice>(ios.value)) {
+                        // Slices are not bound variables
+                        continue;
+                    }
+                    const auto& idx = std::get<Index>(ios.value);
                     if (const auto* id = std::get_if<Identifier>(&idx.value)) {
                         if (env.has(id->name)) {
                             hasBoundIndices = true;
@@ -309,17 +325,23 @@ namespace tl {
                 if (leftRef) {
                     // Collect free variable indices from left operand
                     std::vector<std::string> leftIndices;
-                    for (const auto& idx : leftRef->ref.indices) {
-                        if (const auto* id = std::get_if<Identifier>(&idx.value)) {
-                            leftIndices.push_back(id->name);
+                    for (const auto& ios : leftRef->ref.indices) {
+                        if (std::holds_alternative<Index>(ios.value)) {
+                            const auto& idx = std::get<Index>(ios.value);
+                            if (const auto* id = std::get_if<Identifier>(&idx.value)) {
+                                leftIndices.push_back(id->name);
+                            }
                         }
                     }
 
                     // Collect free variable indices from LHS context
                     std::vector<std::string> outIndices;
-                    for (const auto& idx : lhsCtx.indices) {
-                        if (const auto* id = std::get_if<Identifier>(&idx.value)) {
-                            outIndices.push_back(id->name);
+                    for (const auto& ios : lhsCtx.indices) {
+                        if (std::holds_alternative<Index>(ios.value)) {
+                            const auto& idx = std::get<Index>(ios.value);
+                            if (const auto* id = std::get_if<Identifier>(&idx.value)) {
+                                outIndices.push_back(id->name);
+                            }
                         }
                     }
 

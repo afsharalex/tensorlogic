@@ -85,5 +85,13 @@ namespace tl {
          * @return Pointer to ExprTensorRef if found, nullptr otherwise
          */
         const ExprTensorRef* asExprTensorRef(const ExprPtr& expr);
+
+        /**
+         * @brief Convert tl::Slice to torch::indexing::Slice
+         *
+         * Converts a TensorLogic slice (with optional start/end/step) to a PyTorch slice.
+         * Handles empty optionals properly (None in Python).
+         */
+        torch::indexing::Slice convertSlice(const tl::Slice& slice);
     } // namespace executor_utils
 } // namespace tl
