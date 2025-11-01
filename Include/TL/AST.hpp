@@ -146,12 +146,28 @@ struct FileOperation {
 // Forward declaration to allow Query to reference DatalogCondition
 struct DatalogCondition;
 
+// Learning directive argument: name=value pair
+struct DirectiveArg {
+    Identifier name;
+    std::variant<NumberLiteral, StringLiteral, bool> value;
+    SourceLocation loc{};
+};
+
+// Learning directive: @minimize, @maximize, @sample
+struct QueryDirective {
+    Identifier name;  // "minimize", "maximize", "sample"
+    std::vector<DirectiveArg> args;  // e.g., lr=0.01, epochs=100
+    SourceLocation loc{};
+};
+
 struct Query {
     // Support queries over tensor refs and Datalog atoms
     // Additionally, for Datalog queries, we may allow a conjunction of atoms and comparisons.
     std::variant<TensorRef, DatalogAtom> target;
     // If non-empty, represents a conjunctive query of atoms/conditions; the first element is usually the same as `target` when `target` holds a DatalogAtom.
     std::vector<std::variant<DatalogAtom, DatalogNegation, DatalogCondition>> body;
+    // Optional learning directive (e.g., Loss? @minimize(lr=0.01, epochs=100))
+    std::optional<QueryDirective> directive;
     SourceLocation loc{};
 };
 

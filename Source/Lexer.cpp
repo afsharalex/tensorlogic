@@ -55,6 +55,7 @@ namespace tl::lex {
     struct pipe   : pegtl::one<'|'> {};
     struct percent : pegtl::one<'%'> {};
     struct caret  : pegtl::one<'^'> {};
+    struct at_sign : pegtl::one<'@'> {};  // '@' for learning directives
     struct exclaim : pegtl::one<'!'> {};  // '!' for negation (not confused with != due to token order)
     // '¬' is UTF-8: 0xC2 0xAC - use bytes directly
     struct neg_symbol : pegtl::seq< pegtl::one<'\xC2'>, pegtl::one<'\xAC'> > {};
@@ -81,7 +82,7 @@ namespace tl::lex {
                 larrow, ge, le, eqeq, noteq, gt, lt,  // noteq must come before exclaim
                 neg_symbol, exclaim,  // negation operators: ¬ and !
                 lbrack, rbrack, lparen, rparen, comma, equals, qmark, plus, minus, dot, slash, star,
-                colon, pipe, percent, caret,
+                colon, pipe, percent, caret, at_sign,
                 unknown_char
             > {};
 
@@ -191,6 +192,7 @@ namespace tl::lex {
     DEFINE_CHAR_TOKEN(pipe,   Token::Pipe,   '|')
     DEFINE_CHAR_TOKEN(percent, Token::Percent, '%')
     DEFINE_CHAR_TOKEN(caret,  Token::Caret,  '^')
+    DEFINE_CHAR_TOKEN(at_sign, Token::At, '@')
 
     // Negation operators: map both '!' and '¬' to KwNot
     template<> struct action< exclaim > {

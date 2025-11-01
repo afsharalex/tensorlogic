@@ -128,6 +128,8 @@ TensorLogicVM::TensorLogicVM(std::ostream* out, std::ostream* err)
   }
   initializePreprocessors();
   initializeExecutors();
+  // Initialize learning engine after executors are registered
+  learning_engine_ = std::make_unique<LearningEngine>(env_, *torch_, executor_registry_);
 }
 
 void TensorLogicVM::initializePreprocessors() {
@@ -172,6 +174,9 @@ void TensorLogicVM::debugLog(const std::string &msg) const {
 }
 
 void TensorLogicVM::execute(const Program &program) {
+  // Store current program for learning directives
+  current_program_ = program;
+
   if (debug_) {
     debugLog("========== EXECUTE START ==========");
     debugLog("Total statements: " + std::to_string(program.statements.size()));
@@ -836,6 +841,30 @@ void TensorLogicVM::executeFixedPointLoop(const FixedPointLoop &loop) {
 
 void TensorLogicVM::execQuery(const Query &q) {
   using torch::indexing::TensorIndex;
+
+  // Handle learning directives
+  if (q.directive.has_value()) {
+    const auto& directive = q.directive.value();
+
+    // Get target name
+    std::string targetName;
+    if (std::holds_alternative<TensorRef>(q.target)) {
+      targetName = std::get<TensorRef>(q.target).name.name;
+    } else {
+      throw std::runtime_error("Learning directives only supported for tensor queries");
+    }
+
+    if (debug_) {
+      debugLog("Executing learning directive: @" + directive.name.name + " on " + targetName);
+    }
+
+    // Execute the learning directive
+    torch::Tensor result = learning_engine_->executeDirective(targetName, directive, current_program_);
+
+    // Print the result
+    (*output_stream_) << targetName << " (after " << directive.name.name << ") =\n" << result << std::endl;
+    return;
+  }
 
   // Handle tensor queries
   if (std::holds_alternative<TensorRef>(q.target)) {

@@ -29,6 +29,7 @@ add_executable(tl
     Source/VM.cpp
     Source/Runtime/ExecutorUtils.cpp
     Source/Runtime/DatalogEngine.cpp
+    Source/Runtime/LearningEngine.cpp
     Source/Runtime/Executors/ScalarAssignExecutor.cpp
     Source/Runtime/Executors/ListLiteralExecutor.cpp
     Source/Runtime/Executors/EinsumExecutor.cpp
@@ -72,6 +73,7 @@ add_executable(tl_tests
     Tests/Unit/test_normalized_indices.cpp
     Tests/Unit/test_datalog_arithmetic.cpp
     Tests/Unit/test_tensor_comparisons.cpp
+    Tests/Unit/test_learning_directives.cpp
 
     # Source files needed for tests
     Source/Parser.cpp
@@ -81,6 +83,7 @@ add_executable(tl_tests
     Source/backend_libtorch.cpp
     Source/Runtime/ExecutorUtils.cpp
     Source/Runtime/DatalogEngine.cpp
+    Source/Runtime/LearningEngine.cpp
     Source/Runtime/Executors/ScalarAssignExecutor.cpp
     Source/Runtime/Executors/ListLiteralExecutor.cpp
     Source/Runtime/Executors/EinsumExecutor.cpp
