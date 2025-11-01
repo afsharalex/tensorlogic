@@ -36,6 +36,7 @@ struct VirtualIndex {
 struct Index {
     // Can be a simple identifier, integer literal, or virtual index
     std::variant<Identifier, NumberLiteral, VirtualIndex> value;
+    bool normalized{false};  // True if followed by '.' (e.g., "i." for softmax normalization)
     SourceLocation loc{};
 };
 

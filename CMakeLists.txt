@@ -34,6 +34,7 @@ add_executable(tl
     Source/Runtime/Executors/EinsumExecutor.cpp
     Source/Runtime/Executors/IndexedProductExecutor.cpp
     Source/Runtime/Executors/ReductionExecutor.cpp
+    Source/Runtime/Executors/NormalizationExecutor.cpp
     Source/Runtime/Executors/IdentityExecutor.cpp
     Source/Runtime/Executors/PoolingExecutor.cpp
     Source/Runtime/Executors/GuardedClauseExecutor.cpp
@@ -68,6 +69,7 @@ add_executable(tl_tests
     Tests/Unit/test_executors.cpp
     Tests/Unit/test_guarded_clauses.cpp
     Tests/Unit/test_slicing.cpp
+    Tests/Unit/test_normalized_indices.cpp
 
     # Source files needed for tests
     Source/Parser.cpp
@@ -82,6 +84,7 @@ add_executable(tl_tests
     Source/Runtime/Executors/EinsumExecutor.cpp
     Source/Runtime/Executors/IndexedProductExecutor.cpp
     Source/Runtime/Executors/ReductionExecutor.cpp
+    Source/Runtime/Executors/NormalizationExecutor.cpp
     Source/Runtime/Executors/IdentityExecutor.cpp
     Source/Runtime/Executors/PoolingExecutor.cpp
     Source/Runtime/Executors/GuardedClauseExecutor.cpp

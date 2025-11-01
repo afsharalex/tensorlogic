@@ -124,11 +124,12 @@ private:
                 Identifier composed{id.name + "/" + div.text, id.loc};
                 id = std::move(composed);
             }
-            // optional normalization dot suffix: i.
-            if (tok_.type == Token::Dot) {
-                advance(); // ignore normalization for now
-            }
             idx.value = std::move(id);
+            // Check for normalization dot suffix: i.
+            if (tok_.type == Token::Dot) {
+                advance();
+                idx.normalized = true;
+            }
         } else if (tok_.type == Token::Integer) {
             idx.value = parseNumber();
         } else {
@@ -648,6 +649,40 @@ private:
         return f;
     }
 
+    // Validate normalized indices constraints
+    void validateNormalizedIndices(const TensorEquation& eq) {
+        int normalizedCount = 0;
+        const Index* normalizedIndex = nullptr;
+
+        // Check LHS for normalized indices
+        for (const auto& ios : eq.lhs.indices) {
+            if (auto* idx = std::get_if<Index>(&ios.value)) {
+                if (idx->normalized) {
+                    normalizedCount++;
+                    normalizedIndex = idx;
+
+                    // Constraint: normalized index must be a free variable (lowercase identifier)
+                    if (auto* ident = std::get_if<Identifier>(&idx->value)) {
+                        if (!startsWithLower(ident->name)) {
+                            std::ostringstream oss;
+                            oss << "Normalized index must be a free variable (lowercase identifier), got '"
+                                << ident->name << "'";
+                            throw ParseError(oss.str());
+                        }
+                    } else {
+                        // Normalized index is not an identifier (could be number or virtual index)
+                        throw ParseError("Normalized index must be a free variable (lowercase identifier), not a number or virtual index");
+                    }
+                }
+            }
+        }
+
+        // Constraint: at most one normalized index per equation
+        if (normalizedCount > 1) {
+            throw ParseError("Only one index can be normalized per equation");
+        }
+    }
+
     Statement parseStatement() {
         // Possible Datalog atom/rule/fact at statement start
         if (tok_.type == Token::Identifier && tok_.text != "file" && toks_.peek().type == Token::LParen && startsWithUpper(tok_.text)) {
@@ -735,6 +770,7 @@ private:
                     eq.clauses.push_back(parseGuardedClause());
                     skipNewlines(); // Allow newlines before next '|'
                 }
+                validateNormalizedIndices(eq);
                 return eq;
             } catch (const ParseError&) {
                 // If failed, restore token best-effort (no backtracking of token stream provided)
@@ -766,6 +802,7 @@ private:
             eq.clauses.push_back(parseGuardedClause());
             skipNewlines(); // Allow newlines before next '|'
         }
+        validateNormalizedIndices(eq);
         return eq;
     }
 
