@@ -231,3 +231,73 @@ TEST_CASE("Label-based indexing", "[tensor][labels]") {
     REQUIRE(W.dim() == 1);
     REQUIRE(W.size(0) >= 3);
 }
+
+TEST_CASE("Scalar exponentiation", "[tensor][exponentiation]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+    auto prog = parseProgram("result = 2^3");
+    vm.execute(prog);
+
+    auto result = vm.env().lookup("result");
+    REQUIRE_THAT(getScalar(result), WithinAbs(8.0f, 0.001f));
+}
+
+TEST_CASE("Right-associative exponentiation", "[tensor][exponentiation]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+    // 2^(3^2) = 2^9 = 512 (right-associative)
+    // NOT (2^3)^2 = 8^2 = 64 (left-associative)
+    auto prog = parseProgram("result = 2^3^2");
+    vm.execute(prog);
+
+    auto result = vm.env().lookup("result");
+    REQUIRE_THAT(getScalar(result), WithinAbs(512.0f, 0.001f));
+}
+
+TEST_CASE("Element-wise tensor exponentiation", "[tensor][exponentiation]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+    auto prog = parseProgram(R"(
+        Base = [2, 3, 4]
+        Exp = [2, 2, 2]
+        Result[i] = Base[i]^Exp[i]
+    )");
+    vm.execute(prog);
+
+    // Result should be [4, 9, 16]
+    auto Result = vm.env().lookup("Result");
+    REQUIRE_THAT(getTensorValue(Result, {0}), WithinAbs(4.0f, 0.001f));
+    REQUIRE_THAT(getTensorValue(Result, {1}), WithinAbs(9.0f, 0.001f));
+    REQUIRE_THAT(getTensorValue(Result, {2}), WithinAbs(16.0f, 0.001f));
+}
+
+TEST_CASE("Exponentiation with scalar and tensor", "[tensor][exponentiation]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+    auto prog = parseProgram(R"(
+        V = [1, 2, 3]
+        Result[i] = 2^V[i]
+    )");
+    vm.execute(prog);
+
+    // Result should be [2^1, 2^2, 2^3] = [2, 4, 8]
+    auto Result = vm.env().lookup("Result");
+    REQUIRE_THAT(getTensorValue(Result, {0}), WithinAbs(2.0f, 0.001f));
+    REQUIRE_THAT(getTensorValue(Result, {1}), WithinAbs(4.0f, 0.001f));
+    REQUIRE_THAT(getTensorValue(Result, {2}), WithinAbs(8.0f, 0.001f));
+}
+
+TEST_CASE("Polynomial expression with exponentiation", "[tensor][exponentiation]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+    // Compute y = x^2 + 2*x + 1 for x = 3
+    auto prog = parseProgram(R"(
+        x = 3
+        y = x^2 + 2*x + 1
+    )");
+    vm.execute(prog);
+
+    // y = 3^2 + 2*3 + 1 = 9 + 6 + 1 = 16
+    auto y = vm.env().lookup("y");
+    REQUIRE_THAT(getScalar(y), WithinAbs(16.0f, 0.001f));
+}

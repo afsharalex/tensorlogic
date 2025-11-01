@@ -425,6 +425,8 @@ namespace tl {
                     return torch::fmod(a, b);
                 case Op::Mul:
                     return a * b;
+                case Op::Pow:
+                    return torch::pow(a, b);
                 case Op::Lt:
                     return torch::lt(a, b).to(torch::kFloat32);
                 case Op::Le:

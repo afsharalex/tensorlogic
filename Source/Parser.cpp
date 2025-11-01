@@ -381,16 +381,31 @@ private:
         // return {};
     }
 
-    // term := primary { (('*' | '/' | '%') primary) | primary }  // support explicit division, modulo, and implicit multiplication
-    ExprPtr parseTerm() {
+    // power := primary [ '^' power ]  // right-associative exponentiation
+    ExprPtr parsePower() {
         auto lhs = parsePrimary();
+        if (tok_.type == Token::Caret) {
+            advance();
+            auto rhs = parsePower();  // right-associative: recurse for right side
+            auto e = std::make_shared<Expr>();
+            e->loc = lhs->loc;
+            ExprBinary bin; bin.op = ExprBinary::Op::Pow; bin.lhs = lhs; bin.rhs = rhs;
+            e->node = std::move(bin);
+            return e;
+        }
+        return lhs;
+    }
+
+    // term := power { (('*' | '/' | '%') power) | power }  // support explicit division, modulo, and implicit multiplication
+    ExprPtr parseTerm() {
+        auto lhs = parsePower();
         auto startsPrimary = [&](Token::Type t)->bool {
             return t == Token::Identifier || t == Token::Integer || t == Token::Float || t == Token::LParen; // exclude String from implicit mul
         };
         while (true) {
             if (tok_.type == Token::Slash) {
                 advance();
-                auto rhs = parsePrimary();
+                auto rhs = parsePower();
                 auto e = std::make_shared<Expr>();
                 e->loc = lhs->loc;
                 ExprBinary bin; bin.op = ExprBinary::Op::Div; bin.lhs = lhs; bin.rhs = rhs;
@@ -400,7 +415,7 @@ private:
             }
             if (tok_.type == Token::Star) {
                 advance();
-                auto rhs = parsePrimary();
+                auto rhs = parsePower();
                 auto e = std::make_shared<Expr>();
                 e->loc = lhs->loc;
                 ExprBinary bin; bin.op = ExprBinary::Op::Mul; bin.lhs = lhs; bin.rhs = rhs;
@@ -410,7 +425,7 @@ private:
             }
             if (tok_.type == Token::Percent) {
                 advance();
-                auto rhs = parsePrimary();
+                auto rhs = parsePower();
                 auto e = std::make_shared<Expr>();
                 e->loc = lhs->loc;
                 ExprBinary bin; bin.op = ExprBinary::Op::Mod; bin.lhs = lhs; bin.rhs = rhs;
@@ -419,7 +434,7 @@ private:
                 continue;
             }
             if (startsPrimary(tok_.type)) {
-                auto rhs = parsePrimary();
+                auto rhs = parsePower();
                 auto e = std::make_shared<Expr>();
                 e->loc = lhs->loc;
                 ExprBinary bin; bin.op = ExprBinary::Op::Mul; bin.lhs = lhs; bin.rhs = rhs;

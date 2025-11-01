@@ -79,8 +79,9 @@ struct ExprCall { Identifier func; std::vector<ExprPtr> args; };
 struct ExprBinary {
     enum class Op {
         Add, Sub, Mul, Div, Mod,  // Arithmetic operators
-        Lt, Le, Gt, Ge, Eq, Ne,  // Comparison operators: <, <=, >, >=, ==, !=
-        And, Or                   // Logical operators
+        Pow,                       // Exponentiation (right-associative)
+        Lt, Le, Gt, Ge, Eq, Ne,   // Comparison operators: <, <=, >, >=, ==, !=
+        And, Or                    // Logical operators
     };
     Op op{Op::Add};
     ExprPtr lhs;
