@@ -71,6 +71,7 @@ add_executable(tl_tests
     Tests/Unit/test_slicing.cpp
     Tests/Unit/test_normalized_indices.cpp
     Tests/Unit/test_datalog_arithmetic.cpp
+    Tests/Unit/test_tensor_comparisons.cpp
 
     # Source files needed for tests
     Source/Parser.cpp
