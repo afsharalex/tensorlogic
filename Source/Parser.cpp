@@ -921,50 +921,12 @@ private:
             FileOperation fo; fo.lhsIsTensor = false; fo.tensor = tr; fo.file = s; fo.loc = s.loc;
             return fo;
         }
-        // Query: tensor_ref?
-        {
-            // Try to parse tensor_ref followed by '?'
-            auto save = tok_;
-            try {
-                auto tr = parseTensorRef();
-                if (accept(Token::Question)) {
-                    Query q; q.target = tr; q.loc = tr.loc; return q;
-                }
-                // Not a query; fallthrough to equation
-                // Reset not possible easily; instead, if no '?', we consider it as LHS already consumed
-                // Build equation from existing LHS
-                // Parse projection operator: '=', '+=', 'avg=', 'max=', 'min='
-                std::string proj = "=";
-                if (tok_.type == Token::Plus) {
-                    advance(); expect(Token::Equals, "="); proj = "+=";
-                } else if (tok_.type == Token::Identifier && (tok_.text == "avg" || tok_.text == "max" || tok_.text == "min")) {
-                    std::string op = tok_.text; advance(); expect(Token::Equals, "="); proj = op + "=";
-                } else {
-                    expect(Token::Equals, "projection '='");
-                }
-                // Support file operation: tensor_ref = file_literal
-                if ((tok_.type == Token::Identifier && tok_.text == "file") || tok_.type == Token::String) {
-                    StringLiteral s = (tok_.type == Token::String) ? parseString() : parseFileLiteral();
-                    FileOperation fo; fo.lhsIsTensor = true; fo.tensor = tr; fo.file = s; fo.loc = s.loc;
-                    return fo;
-                }
-                // Parse guarded clauses separated by '|'
-                TensorEquation eq; eq.lhs = tr; eq.projection = proj; eq.loc = tr.loc;
-                eq.clauses.push_back(parseGuardedClause());
-                skipNewlines(); // Allow newlines before '|'
-                while (accept(Token::Pipe)) {
-                    eq.clauses.push_back(parseGuardedClause());
-                    skipNewlines(); // Allow newlines before next '|'
-                }
-                validateNormalizedIndices(eq);
-                return eq;
-            } catch (const ParseError&) {
-                // If failed, restore token best-effort (no backtracking of token stream provided)
-                tok_ = save;
-            }
-        }
-        // Fallback explicit equation parse
+        // Fallback: tensor equation or query
         TensorRef lhs = parseTensorRef();
+        // Check if this is a query: tensor_ref?
+        if (accept(Token::Question)) {
+            Query q; q.target = lhs; q.loc = lhs.loc; return q;
+        }
         // Parse projection operator: '=', '+=', 'avg=', 'max=', 'min='
         std::string proj = "=";
         if (tok_.type == Token::Plus) {
