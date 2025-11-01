@@ -28,7 +28,7 @@ struct LearningConfig {
 // The LearningEngine handles gradient-based learning using PyTorch autograd
 class LearningEngine {
 public:
-    explicit LearningEngine(Environment& env, TensorBackend& backend, ExecutorRegistry& registry);
+    explicit LearningEngine(Environment& env, TensorBackend& backend, ExecutorRegistry& registry, std::ostream* output = nullptr);
 
     // Execute a learning directive on a target tensor
     // Returns the final value of the target after optimization
@@ -62,6 +62,7 @@ private:
     Environment& env_;
     TensorBackend& backend_;
     ExecutorRegistry& registry_;
+    std::ostream* output_;
 
     // Identify learnable parameters (tensors not derived from other tensors)
     std::unordered_set<std::string> identifyLearnableParameters(const Program& program);

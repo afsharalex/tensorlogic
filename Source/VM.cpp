@@ -129,7 +129,7 @@ TensorLogicVM::TensorLogicVM(std::ostream* out, std::ostream* err)
   initializePreprocessors();
   initializeExecutors();
   // Initialize learning engine after executors are registered
-  learning_engine_ = std::make_unique<LearningEngine>(env_, *torch_, executor_registry_);
+  learning_engine_ = std::make_unique<LearningEngine>(env_, *torch_, executor_registry_, output_stream_);
 }
 
 void TensorLogicVM::initializePreprocessors() {

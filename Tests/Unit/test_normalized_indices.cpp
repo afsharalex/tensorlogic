@@ -2,6 +2,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "TL/Parser.hpp"
 #include "TL/vm.hpp"
+#include <sstream>
 
 using namespace tl;
 using Catch::Matchers::WithinAbs;
@@ -18,7 +19,8 @@ TEST_CASE("Normalized indices - basic softmax", "[normalized]") {
     )";
 
     auto program = tl::parseProgram(code);
-    TensorLogicVM vm;
+    std::ostringstream out, err;
+    TensorLogicVM vm(&out, &err);
     vm.execute(program);
 
     auto Y = vm.env().lookup("Y");
@@ -50,7 +52,8 @@ TEST_CASE("Normalized indices - 2D tensor normalization", "[normalized]") {
     )";
 
     auto program = tl::parseProgram(code);
-    TensorLogicVM vm;
+    std::ostringstream out, err;
+    TensorLogicVM vm(&out, &err);
     vm.execute(program);
 
     auto Probs = vm.env().lookup("Probs");
@@ -83,7 +86,8 @@ TEST_CASE("Normalized indices - attention mechanism", "[normalized]") {
     )";
 
     auto program = tl::parseProgram(code);
-    TensorLogicVM vm;
+    std::ostringstream out, err;
+    TensorLogicVM vm(&out, &err);
     vm.execute(program);
 
     auto Attn = vm.env().lookup("Attn");
@@ -105,7 +109,8 @@ TEST_CASE("Normalized indices - explicit softmax should not double-normalize", "
     )";
 
     auto program = tl::parseProgram(code);
-    TensorLogicVM vm;
+    std::ostringstream out, err;
+    TensorLogicVM vm(&out, &err);
     vm.execute(program);
 
     auto Y = vm.env().lookup("Y");
@@ -154,7 +159,8 @@ TEST_CASE("Normalized indices - works with expressions", "[normalized]") {
     )";
 
     auto program = tl::parseProgram(code);
-    TensorLogicVM vm;
+    std::ostringstream out, err;
+    TensorLogicVM vm(&out, &err);
     vm.execute(program);
 
     auto Y = vm.env().lookup("Y");
@@ -177,7 +183,8 @@ TEST_CASE("Normalized indices - scalar edge case", "[normalized]") {
     )";
 
     auto program = tl::parseProgram(code);
-    TensorLogicVM vm;
+    std::ostringstream out, err;
+    TensorLogicVM vm(&out, &err);
     vm.execute(program);
 
     auto y = vm.env().lookup("y");
@@ -198,7 +205,8 @@ TEST_CASE("Normalized indices - with arithmetic operations", "[normalized]") {
     )";
 
     auto program = tl::parseProgram(code);
-    TensorLogicVM vm;
+    std::ostringstream out, err;
+    TensorLogicVM vm(&out, &err);
     vm.execute(program);
 
     auto Y = vm.env().lookup("Y");

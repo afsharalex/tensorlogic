@@ -47,8 +47,8 @@ LearningConfig LearningConfig::fromDirective(const QueryDirective& dir) {
     return config;
 }
 
-LearningEngine::LearningEngine(Environment& env, TensorBackend& backend, ExecutorRegistry& registry)
-    : env_(env), backend_(backend), registry_(registry) {}
+LearningEngine::LearningEngine(Environment& env, TensorBackend& backend, ExecutorRegistry& registry, std::ostream* output)
+    : env_(env), backend_(backend), registry_(registry), output_(output ? output : &std::cout) {}
 
 torch::Tensor LearningEngine::executeDirective(
     const std::string& targetName,
@@ -73,7 +73,10 @@ std::unordered_set<std::string> LearningEngine::identifyLearnableParameters(cons
     std::unordered_set<std::string> computed;
 
     // Identify which tensors are computed from others (have dependencies)
-    // A tensor is learnable if it's initialized with a literal list
+    // A tensor is learnable if:
+    // 1. It's initialized with a literal list, AND
+    // 2. It has a lowercase first letter (naming convention: lowercase = parameter, UPPERCASE = data)
+    //    OR it starts with 'W' (common convention for weight matrices)
     for (const auto& stmt : program.statements) {
         if (auto* eq = std::get_if<TensorEquation>(&stmt)) {
             const std::string& lhsName = eq->lhs.name.name;
@@ -88,8 +91,24 @@ std::unordered_set<std::string> LearningEngine::identifyLearnableParameters(cons
             }
 
             if (isListLiteral) {
-                // This is a learnable parameter initialized with a list
-                learnable.insert(lhsName);
+                // Check naming convention: lowercase first letter = learnable parameter
+                // Exception: uppercase W* (weight matrices) are also learnable
+                bool isParameter = false;
+                if (!lhsName.empty()) {
+                    char first = lhsName[0];
+                    if (std::islower(static_cast<unsigned char>(first))) {
+                        // Lowercase = parameter
+                        isParameter = true;
+                    } else if (first == 'W') {
+                        // W* = weight matrix (parameter)
+                        isParameter = true;
+                    }
+                    // Otherwise uppercase = data/constant
+                }
+
+                if (isParameter) {
+                    learnable.insert(lhsName);
+                }
             } else {
                 // This is a computed tensor
                 computed.insert(lhsName);
@@ -125,7 +144,9 @@ void LearningEngine::forwardPass(const Program& program) {
             }
 
             // Execute the equation - this will compute fresh values with gradients
-            registry_.execute(*eq, env_, backend_);
+            // IMPORTANT: Must bind result back to environment to preserve gradient chain
+            torch::Tensor result = registry_.execute(*eq, env_, backend_);
+            env_.bind(eq->lhs.name.name, result);
         }
     }
 }
@@ -193,7 +214,7 @@ torch::Tensor LearningEngine::minimize(
     for (const auto& name : params) {
         env_.bind(name, param_tensors[idx]);
         if (config.verbose) {
-            std::cout << "Parameter " << name << " requires_grad="
+            (*output_) << "Parameter " << name << " requires_grad="
                       << param_tensors[idx].requires_grad() << std::endl;
         }
         idx++;
@@ -217,7 +238,7 @@ torch::Tensor LearningEngine::minimize(
 
         torch::Tensor loss = env_.lookup(lossName);
         if (config.verbose && epoch == 0) {
-            std::cout << "Loss tensor requires_grad=" << loss.requires_grad()
+            (*output_) << "Loss tensor requires_grad=" << loss.requires_grad()
                       << ", has grad_fn=" << (loss.grad_fn() != nullptr) << std::endl;
         }
 
@@ -233,7 +254,7 @@ torch::Tensor LearningEngine::minimize(
 
         // Print progress
         if (config.verbose && (epoch % (config.epochs / 10) == 0 || epoch == config.epochs - 1)) {
-            std::cout << "Epoch " << epoch << "/" << config.epochs
+            (*output_) << "Epoch " << epoch << "/" << config.epochs
                       << " - Loss: " << loss.item<double>() << std::endl;
         }
     }
@@ -288,7 +309,7 @@ torch::Tensor LearningEngine::maximize(
         optimizer.step();
 
         if (config.verbose && (epoch % (config.epochs / 10) == 0 || epoch == config.epochs - 1)) {
-            std::cout << "Epoch " << epoch << "/" << config.epochs
+            (*output_) << "Epoch " << epoch << "/" << config.epochs
                       << " - Reward: " << reward.item<double>() << std::endl;
         }
     }

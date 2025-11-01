@@ -137,15 +137,15 @@ TEST_CASE("Query without directive works", "[learning][query]") {
     REQUIRE(output.find("3") != std::string::npos);
 }
 
-// NOTE: The following tests will work once gradient tracking is fixed
+// Gradient tracking tests - these now work correctly!
 
-TEST_CASE("Simple quadratic optimization", "[learning][minimize][.gradient_issue]") {
+TEST_CASE("Simple quadratic optimization", "[learning][minimize]") {
     // Test case: minimize (x - 2)^2
     // Optimal solution: x = 2
     std::string code = R"(
         x = [0.0]
-        target = [2.0]
-        diff = x[0] - target[0]
+        Target = [2.0]
+        diff = x[0] - Target[0]
         loss = diff^2
         loss? @minimize(lr=0.1, epochs=100)
     )";
@@ -163,7 +163,7 @@ TEST_CASE("Simple quadratic optimization", "[learning][minimize][.gradient_issue
     REQUIRE_THAT(x_val, Catch::Matchers::WithinAbs(2.0, 0.1));
 }
 
-TEST_CASE("Linear regression convergence", "[learning][minimize][.gradient_issue]") {
+TEST_CASE("Linear regression convergence", "[learning][minimize]") {
     // y = 2x + 1, learn m and b
     std::string code = R"(
         X = [1.0, 2.0, 3.0, 4.0, 5.0]
@@ -197,12 +197,12 @@ TEST_CASE("Linear regression convergence", "[learning][minimize][.gradient_issue
     REQUIRE_THAT(b_val, Catch::Matchers::WithinAbs(1.0, 0.2));
 }
 
-TEST_CASE("Maximize simple reward", "[learning][maximize][.gradient_issue]") {
+TEST_CASE("Maximize simple reward", "[learning][maximize]") {
     // Maximize -(x - 3)^2, optimal at x = 3
     std::string code = R"(
         x = [0.0]
-        target = [3.0]
-        diff = x[0] - target[0]
+        Target = [3.0]
+        diff = x[0] - Target[0]
         neg_loss = -(diff^2)
         neg_loss? @maximize(lr=0.1, epochs=100)
     )";
@@ -237,7 +237,7 @@ TEST_CASE("Sample from distribution", "[learning][sample]") {
     REQUIRE(!output.empty());
 }
 
-TEST_CASE("Verbose mode outputs progress", "[learning][verbose][.gradient_issue]") {
+TEST_CASE("Verbose mode outputs progress", "[learning][verbose]") {
     std::string code = R"(
         x = [0.0]
         loss = x[0]^2
@@ -256,18 +256,18 @@ TEST_CASE("Verbose mode outputs progress", "[learning][verbose][.gradient_issue]
     REQUIRE(output.find("Epoch") != std::string::npos);
 }
 
-TEST_CASE("Multi-parameter optimization", "[learning][minimize][.gradient_issue]") {
+TEST_CASE("Multi-parameter optimization", "[learning][minimize]") {
     // Minimize (x - 1)^2 + (y - 2)^2
     // Optimal: x = 1, y = 2
     std::string code = R"(
         x = [0.0]
         y = [0.0]
 
-        tx = [1.0]
-        ty = [2.0]
+        TX = [1.0]
+        TY = [2.0]
 
-        dx = x[0] - tx[0]
-        dy = y[0] - ty[0]
+        dx = x[0] - TX[0]
+        dy = y[0] - TY[0]
 
         loss = dx^2 + dy^2
         loss? @minimize(lr=0.1, epochs=150)
@@ -291,11 +291,12 @@ TEST_CASE("Multi-parameter optimization", "[learning][minimize][.gradient_issue]
 }
 
 TEST_CASE("Error: No learnable parameters", "[learning][error]") {
-    // All tensors are computed, none are learnable
+    // All tensors are uppercase (data/constants), none are learnable by naming convention
+    // Per the heuristic: lowercase = parameter, UPPERCASE = data (except W*)
     std::string code = R"(
-        x = [1.0]
-        y = x[0] + 1.0
-        y? @minimize(lr=0.1, epochs=10)
+        X = [1.0]
+        Y = X[0] + 1.0
+        Y? @minimize(lr=0.1, epochs=10)
     )";
 
     Program prog = parseProgram(code);
@@ -304,6 +305,7 @@ TEST_CASE("Error: No learnable parameters", "[learning][error]") {
     TensorLogicVM vm(&out, &err);
 
     // Should throw error about no learnable parameters
+    // X and Y are uppercase (data), so neither should be learnable
     REQUIRE_THROWS_WITH(vm.execute(prog),
         Catch::Matchers::ContainsSubstring("No learnable parameters"));
 }
