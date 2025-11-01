@@ -70,6 +70,7 @@ add_executable(tl_tests
     Tests/Unit/test_guarded_clauses.cpp
     Tests/Unit/test_slicing.cpp
     Tests/Unit/test_normalized_indices.cpp
+    Tests/Unit/test_datalog_arithmetic.cpp
 
     # Source files needed for tests
     Source/Parser.cpp

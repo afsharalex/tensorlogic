@@ -85,10 +85,18 @@ size_t DatalogEngine::applyRule(const DatalogRule& rule) {
                 const std::string& val = tup[i];
                 if (std::holds_alternative<StringLiteral>(term)) {
                     if (std::get<StringLiteral>(term).text != val) { ok = false; break; }
-                } else {
+                } else if (std::holds_alternative<Identifier>(term)) {
                     const std::string& vn = std::get<Identifier>(term).name;
                     auto it = binding.find(vn);
                     if (it != binding.end() && it->second != val) { ok = false; break; }
+                } else {
+                    // ExprPtr: evaluate and compare
+                    const auto& expr = std::get<ExprPtr>(term);
+                    std::string outStr; double outNum = 0; bool isNumeric = false;
+                    if (!evalExprBinding(expr, binding, outStr, outNum, isNumeric)) {
+                        ok = false; break;
+                    }
+                    if (outStr != val) { ok = false; break; }
                 }
             }
             if (ok) return true;
@@ -114,7 +122,7 @@ size_t DatalogEngine::applyRule(const DatalogRule& rule) {
             for (const auto& t : rule.head.terms) {
                 if (std::holds_alternative<StringLiteral>(t)) {
                     headTuple.push_back(std::get<StringLiteral>(t).text);
-                } else {
+                } else if (std::holds_alternative<Identifier>(t)) {
                     const std::string& vn = std::get<Identifier>(t).name;
                     auto it = binding.find(vn);
                     if (it == binding.end()) {
@@ -122,6 +130,15 @@ size_t DatalogEngine::applyRule(const DatalogRule& rule) {
                         return;
                     }
                     headTuple.push_back(it->second);
+                } else {
+                    // ExprPtr: evaluate the arithmetic expression
+                    const auto& expr = std::get<ExprPtr>(t);
+                    std::string outStr; double outNum = 0; bool isNumeric = false;
+                    if (!evalExprBinding(expr, binding, outStr, outNum, isNumeric)) {
+                        // Failed to evaluate expression: skip this binding
+                        return;
+                    }
+                    headTuple.push_back(outStr);
                 }
             }
             if (env_.addFact(rule.head.relation.name, headTuple)) {
@@ -142,7 +159,7 @@ size_t DatalogEngine::applyRule(const DatalogRule& rule) {
                 const std::string& val = tup[i];
                 if (std::holds_alternative<StringLiteral>(term)) {
                     if (std::get<StringLiteral>(term).text != val) { ok = false; break; }
-                } else {
+                } else if (std::holds_alternative<Identifier>(term)) {
                     const std::string& vn = std::get<Identifier>(term).name;
                     auto it = binding.find(vn);
                     if (it == binding.end()) {
@@ -151,6 +168,14 @@ size_t DatalogEngine::applyRule(const DatalogRule& rule) {
                     } else if (it->second != val) {
                         ok = false; break;
                     }
+                } else {
+                    // ExprPtr: evaluate and compare with tuple value
+                    const auto& expr = std::get<ExprPtr>(term);
+                    std::string outStr; double outNum = 0; bool isNumeric = false;
+                    if (!evalExprBinding(expr, binding, outStr, outNum, isNumeric)) {
+                        ok = false; break;
+                    }
+                    if (outStr != val) { ok = false; break; }
                 }
             }
             if (ok) {
@@ -222,10 +247,18 @@ void DatalogEngine::execDatalogQuery(const DatalogAtom& atom,
                     const std::string& val = tup[i];
                     if (std::holds_alternative<StringLiteral>(term)) {
                         if (std::get<StringLiteral>(term).text != val) { ok = false; break; }
-                    } else {
+                    } else if (std::holds_alternative<Identifier>(term)) {
                         const std::string& vn = std::get<Identifier>(term).name;
                         auto it = binding.find(vn);
                         if (it != binding.end() && it->second != val) { ok = false; break; }
+                    } else {
+                        // ExprPtr: evaluate and compare
+                        const auto& expr = std::get<ExprPtr>(term);
+                        std::string outStr; double outNum = 0; bool isNumeric = false;
+                        if (!evalExprBinding(expr, binding, outStr, outNum, isNumeric)) {
+                            ok = false; break;
+                        }
+                        if (outStr != val) { ok = false; break; }
                     }
                 }
                 if (ok) return true;
@@ -276,11 +309,19 @@ void DatalogEngine::execDatalogQuery(const DatalogAtom& atom,
                     const std::string& val = tup[i];
                     if (std::holds_alternative<StringLiteral>(term)) {
                         if (std::get<StringLiteral>(term).text != val) { ok = false; break; }
-                    } else {
+                    } else if (std::holds_alternative<Identifier>(term)) {
                         const std::string& vn = std::get<Identifier>(term).name;
                         auto it = binding.find(vn);
                         if (it == binding.end()) { binding.emplace(vn, val); assigned.push_back(vn); }
                         else if (it->second != val) { ok = false; break; }
+                    } else {
+                        // ExprPtr: evaluate and compare
+                        const auto& expr = std::get<ExprPtr>(term);
+                        std::string outStr; double outNum = 0; bool isNumeric = false;
+                        if (!evalExprBinding(expr, binding, outStr, outNum, isNumeric)) {
+                            ok = false; break;
+                        }
+                        if (outStr != val) { ok = false; break; }
                     }
                 }
                 if (ok) dfs(idx + 1);
@@ -309,8 +350,10 @@ void DatalogEngine::execDatalogQuery(const DatalogAtom& atom,
             if (i) oss << ", ";
             if (std::holds_alternative<Identifier>(atom.terms[i]))
                 oss << std::get<Identifier>(atom.terms[i]).name;
-            else
+            else if (std::holds_alternative<StringLiteral>(atom.terms[i]))
                 oss << std::get<StringLiteral>(atom.terms[i]).text;
+            else
+                oss << "<expr>";
         }
         oss << ")?";
         debugLog(oss.str());
@@ -320,6 +363,7 @@ void DatalogEngine::execDatalogQuery(const DatalogAtom& atom,
     std::vector<int> varPositions;
     std::vector<std::string> varNames;
     std::vector<std::optional<std::string>> constants(atom.terms.size());
+    std::vector<std::optional<ExprPtr>> exprTerms(atom.terms.size());
     std::unordered_map<std::string, int> firstPos; // for repeated variable consistency
 
     for (size_t i = 0; i < atom.terms.size(); ++i) {
@@ -330,8 +374,11 @@ void DatalogEngine::execDatalogQuery(const DatalogAtom& atom,
                 varPositions.push_back(static_cast<int>(i));
                 varNames.push_back(vname);
             }
-        } else {
+        } else if (std::holds_alternative<StringLiteral>(atom.terms[i])) {
             constants[i] = std::get<StringLiteral>(atom.terms[i]).text;
+        } else {
+            // ExprPtr
+            exprTerms[i] = std::get<ExprPtr>(atom.terms[i]);
         }
     }
 
@@ -342,7 +389,7 @@ void DatalogEngine::execDatalogQuery(const DatalogAtom& atom,
         for (size_t i = 0; i < constants.size(); ++i) {
             if (constants[i].has_value() && tuple[i] != *constants[i]) return false;
         }
-        // Check repeated vars consistency
+        // Build binding for variable consistency check
         std::unordered_map<std::string, std::string> bind;
         for (size_t i = 0; i < atom.terms.size(); ++i) {
             if (std::holds_alternative<Identifier>(atom.terms[i])) {
@@ -350,6 +397,14 @@ void DatalogEngine::execDatalogQuery(const DatalogAtom& atom,
                 auto it = bind.find(vn);
                 if (it == bind.end()) bind.emplace(vn, tuple[i]);
                 else if (it->second != tuple[i]) return false;
+            }
+        }
+        // Check expression terms
+        for (size_t i = 0; i < exprTerms.size(); ++i) {
+            if (exprTerms[i].has_value()) {
+                std::string outStr; double outNum = 0; bool isNumeric = false;
+                if (!evalExprBinding(*exprTerms[i], bind, outStr, outNum, isNumeric)) return false;
+                if (tuple[i] != outStr) return false;
             }
         }
         return true;

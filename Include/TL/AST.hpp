@@ -101,8 +101,8 @@ struct Expr {
 // Datalog structures
 struct DatalogAtom {
     Identifier relation; // Must start uppercase by grammar
-    // Terms: variable (lowercase Identifier) or constant (StringLiteral for Uppercase id/int/string)
-    std::vector<std::variant<Identifier, StringLiteral>> terms;
+    // Terms: variable (lowercase Identifier), constant (StringLiteral for Uppercase id/int/string), or arithmetic expression (ExprPtr)
+    std::vector<std::variant<Identifier, StringLiteral, ExprPtr>> terms;
     SourceLocation loc{};
 };
 

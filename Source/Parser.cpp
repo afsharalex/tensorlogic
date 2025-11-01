@@ -542,22 +542,150 @@ private:
         return parseIdentifier();
     }
 
-    std::variant<Identifier, StringLiteral> parseDatalogTerm() {
-        if (tok_.type == Token::String || tok_.type == Token::Integer || (tok_.type == Token::Identifier && startsWithUpper(tok_.text))) {
-            // constant
+    std::variant<Identifier, StringLiteral, ExprPtr> parseDatalogTerm() {
+        // Check for arithmetic expressions (binary operators indicate complex expression)
+        // Parse primary term first
+        if (tok_.type == Token::String) {
             return parseDatalogConstant();
         }
-        if (tok_.type == Token::Identifier && startsWithLower(tok_.text)) {
-            // variable
-            return parseLowercaseIdentifier();
+        if (tok_.type == Token::Integer) {
+            // Check if this is part of an arithmetic expression
+            auto num = parseNumber();
+            // Check for arithmetic operators
+            if (tok_.type == Token::Plus || tok_.type == Token::Minus ||
+                tok_.type == Token::Star || tok_.type == Token::Slash ||
+                tok_.type == Token::Percent) {
+                // This is an arithmetic expression, parse it fully
+                auto expr = std::make_shared<Expr>();
+                expr->loc = num.loc;
+                expr->node = ExprNumber{num};
+                // Now parse the rest of the expression
+                expr = parseDatalogArithmeticFrom(expr);
+                return expr;
+            }
+            // Just a constant number
+            return StringLiteral{num.text, num.loc};
         }
-        errorHere("datalog term expected (variable or constant)");
+        if (tok_.type == Token::Identifier) {
+            if (startsWithUpper(tok_.text)) {
+                // constant (uppercase identifier)
+                return parseDatalogConstant();
+            } else {
+                // variable (lowercase identifier) or part of arithmetic expression
+                auto id = parseLowercaseIdentifier();
+                // Check for arithmetic operators
+                if (tok_.type == Token::Plus || tok_.type == Token::Minus ||
+                    tok_.type == Token::Star || tok_.type == Token::Slash ||
+                    tok_.type == Token::Percent) {
+                    // This is an arithmetic expression
+                    auto expr = std::make_shared<Expr>();
+                    expr->loc = id.loc;
+                    TensorRef ref;
+                    ref.name = id;
+                    ref.loc = id.loc;
+                    expr->node = ExprTensorRef{ref};
+                    // Parse the rest of the expression
+                    expr = parseDatalogArithmeticFrom(expr);
+                    return expr;
+                }
+                // Just a variable
+                return id;
+            }
+        }
+        if (tok_.type == Token::LParen) {
+            // Parenthesized expression - use parseExpr for full expression support
+            advance();
+            auto inner = parseExpr();
+            expect(Token::RParen, ")");
+            // Check if there's a continuation with arithmetic operators
+            if (tok_.type == Token::Plus || tok_.type == Token::Minus ||
+                tok_.type == Token::Star || tok_.type == Token::Slash ||
+                tok_.type == Token::Percent) {
+                // Continue parsing the arithmetic expression
+                inner = parseDatalogArithmeticFrom(inner);
+            }
+            return inner;
+        }
+        errorHere("datalog term expected (variable, constant, or arithmetic expression)");
         // Unreachable
         // return Identifier{};
     }
 
-    std::vector<std::variant<Identifier, StringLiteral>> parseDatalogTermList() {
-        std::vector<std::variant<Identifier, StringLiteral>> v;
+    // Helper to continue parsing arithmetic expression from a left-hand side with proper precedence
+    // This handles addition/subtraction (lower precedence)
+    ExprPtr parseDatalogArithmeticFrom(ExprPtr lhs) {
+        // First, handle any pending multiplication/division (higher precedence)
+        lhs = parseDatalogArithmeticMulDiv(lhs);
+
+        // Then handle addition/subtraction
+        while (tok_.type == Token::Plus || tok_.type == Token::Minus) {
+            Token::Type op = tok_.type;
+            advance();
+            ExprPtr rhs = parseDatalogArithmeticMulDiv(parseDatalogArithmeticPrimary());
+            auto e = std::make_shared<Expr>();
+            e->loc = lhs->loc;
+            ExprBinary bin;
+            bin.op = (op == Token::Plus) ? ExprBinary::Op::Add : ExprBinary::Op::Sub;
+            bin.lhs = lhs;
+            bin.rhs = rhs;
+            e->node = std::move(bin);
+            lhs = e;
+        }
+        return lhs;
+    }
+
+    // Helper to parse multiplication/division/modulo (higher precedence than add/sub)
+    ExprPtr parseDatalogArithmeticMulDiv(ExprPtr lhs) {
+        while (tok_.type == Token::Star || tok_.type == Token::Slash || tok_.type == Token::Percent) {
+            Token::Type op = tok_.type;
+            advance();
+            ExprPtr rhs = parseDatalogArithmeticPrimary();
+            auto e = std::make_shared<Expr>();
+            e->loc = lhs->loc;
+            ExprBinary bin;
+            if (op == Token::Star) bin.op = ExprBinary::Op::Mul;
+            else if (op == Token::Slash) bin.op = ExprBinary::Op::Div;
+            else bin.op = ExprBinary::Op::Mod;
+            bin.lhs = lhs;
+            bin.rhs = rhs;
+            e->node = std::move(bin);
+            lhs = e;
+        }
+        return lhs;
+    }
+
+    // Parse a primary in datalog arithmetic context
+    ExprPtr parseDatalogArithmeticPrimary() {
+        if (tok_.type == Token::Integer) {
+            auto num = parseNumber();
+            auto e = std::make_shared<Expr>();
+            e->loc = num.loc;
+            e->node = ExprNumber{num};
+            return e;
+        }
+        if (tok_.type == Token::Identifier && startsWithLower(tok_.text)) {
+            auto id = parseLowercaseIdentifier();
+            auto e = std::make_shared<Expr>();
+            e->loc = id.loc;
+            TensorRef ref;
+            ref.name = id;
+            ref.loc = id.loc;
+            e->node = ExprTensorRef{ref};
+            return e;
+        }
+        if (tok_.type == Token::LParen) {
+            advance();
+            auto inner = parseExpr();
+            expect(Token::RParen, ")");
+            return inner;
+        }
+        errorHere("arithmetic primary expected (number, variable, or parenthesized expression)");
+        // Unreachable
+        // return {};
+    }
+
+    std::vector<std::variant<Identifier, StringLiteral, ExprPtr>> parseDatalogTermList() {
+        std::vector<std::variant<Identifier, StringLiteral, ExprPtr>> v;
         v.push_back(parseDatalogTerm());
         while (accept(Token::Comma)) v.push_back(parseDatalogTerm());
         return v;
@@ -568,7 +696,7 @@ private:
         Identifier rel = parseIdentifier();
         SourceLocation loc = rel.loc;
         expect(Token::LParen, "(");
-        std::vector<std::variant<Identifier, StringLiteral>> terms;
+        std::vector<std::variant<Identifier, StringLiteral, ExprPtr>> terms;
         if (tok_.type != Token::RParen) {
             terms = parseDatalogTermList();
         }
@@ -578,7 +706,10 @@ private:
 
     static bool allConstants(const DatalogAtom& a) {
         return std::all_of(a.terms.begin(), a.terms.end(),
-                           [](const auto &t) { return !std::holds_alternative<Identifier>(t); });
+                           [](const auto &t) {
+                               // Constants are StringLiterals (not Identifiers, not ExprPtr)
+                               return std::holds_alternative<StringLiteral>(t);
+                           });
     }
 
     // Comparison operator acceptance: fills opOut with textual op and consumes token
