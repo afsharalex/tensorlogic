@@ -274,8 +274,47 @@ private:
         return ref;
     }
 
-    // Expressions: term ((+|-) term)*, where term is product of primaries by implicit multiplication
+    // Expressions: comparison (comparison_op comparison)?, with proper precedence
+    // Hierarchy: parseExpr -> parseComparison -> parseAddSub -> parseTerm -> parsePower -> parsePrimary
     ExprPtr parseExpr() {
+        return parseComparison();
+    }
+
+    // parseComparison: handles comparison operators (<, >, <=, >=, ==, !=)
+    // These have lower precedence than arithmetic operators
+    ExprPtr parseComparison() {
+        skipNewlines();
+        auto lhs = parseAddSub();
+        // Check for comparison operators
+        if (tok_.type == Token::Less || tok_.type == Token::Le ||
+            tok_.type == Token::Greater || tok_.type == Token::Ge ||
+            tok_.type == Token::EqEq || tok_.type == Token::NotEq) {
+            Token::Type opType = tok_.type;
+            advance();
+            skipNewlines();
+            auto rhs = parseAddSub();
+            auto e = std::make_shared<Expr>();
+            e->loc = lhs->loc;
+            ExprBinary bin;
+            switch (opType) {
+                case Token::Less: bin.op = ExprBinary::Op::Lt; break;
+                case Token::Le: bin.op = ExprBinary::Op::Le; break;
+                case Token::Greater: bin.op = ExprBinary::Op::Gt; break;
+                case Token::Ge: bin.op = ExprBinary::Op::Ge; break;
+                case Token::EqEq: bin.op = ExprBinary::Op::Eq; break;
+                case Token::NotEq: bin.op = ExprBinary::Op::Ne; break;
+                default: errorHere("internal error: unexpected comparison operator");
+            }
+            bin.lhs = lhs;
+            bin.rhs = rhs;
+            e->node = std::move(bin);
+            return e;
+        }
+        return lhs;
+    }
+
+    // parseAddSub: handles addition and subtraction (higher precedence than comparisons)
+    ExprPtr parseAddSub() {
         skipNewlines();
         auto lhs = parseTerm();
         while (true) {
@@ -449,15 +488,16 @@ private:
 
     // Guard condition parsing for guarded clauses
     // parseGuardComparison: handles comparisons of arithmetic expressions
+    // Now uses parseAddSub instead of parseExpr to maintain proper precedence
     ExprPtr parseGuardComparison() {
-        auto lhs = parseExpr();
+        auto lhs = parseAddSub();
         // Check for comparison operators
         if (tok_.type == Token::Less || tok_.type == Token::Le ||
             tok_.type == Token::Greater || tok_.type == Token::Ge ||
             tok_.type == Token::EqEq || tok_.type == Token::NotEq) {
             Token::Type opType = tok_.type;
             advance();
-            auto rhs = parseExpr();
+            auto rhs = parseAddSub();
             auto e = std::make_shared<Expr>();
             e->loc = lhs->loc;
             ExprBinary bin;
@@ -741,12 +781,12 @@ private:
     }
 
     DatalogCondition parseComparisonCondition() {
-        auto lhs = parseExpr();
+        auto lhs = parseAddSub();  // Use parseAddSub to avoid including comparison in subexpressions
         std::string op;
         if (!acceptComparison(op)) {
             errorHere("comparison operator expected (>, <, >=, <=, ==, !=)");
         }
-        auto rhs = parseExpr();
+        auto rhs = parseAddSub();
         DatalogCondition c; c.lhs = lhs; c.op = op; c.rhs = rhs; c.loc = lhs->loc; return c;
     }
 
