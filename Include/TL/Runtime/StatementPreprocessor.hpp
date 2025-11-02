@@ -1,8 +1,8 @@
 #pragma once
 
 #include "TL/AST.hpp"
-#include <vector>
 #include <memory>
+#include <vector>
 
 namespace tl {
     class Environment; // Forward declaration
