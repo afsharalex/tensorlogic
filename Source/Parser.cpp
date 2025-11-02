@@ -1,6 +1,7 @@
 #include "TL/Parser.hpp"
 #include <fstream>
 #include <sstream>
+#include <algorithm>
 #include "TL/Lexer.hpp"
 
 namespace tl {
