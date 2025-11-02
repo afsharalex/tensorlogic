@@ -46,7 +46,6 @@ message(STATUS "URL: ${LIBTORCH_URL}")
 FetchContent_Declare(
     libtorch
     URL "${LIBTORCH_URL}"
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 
 FetchContent_MakeAvailable(libtorch)
