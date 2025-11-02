@@ -16,6 +16,7 @@ namespace tl::lex {
             Greater, Less, Ge, Le, EqEq, NotEq,
             LArrow, // '<-' for Datalog rules
             Colon, Pipe, Percent, Caret,  // New tokens for guards and operators
+            At,  // '@' for learning directives
             KwAnd, KwOr, KwNot,  // Keywords for logical operators
             End, Newline, Unknown
         } type{End};

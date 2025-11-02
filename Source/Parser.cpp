@@ -809,6 +809,58 @@ private:
         return parseComparisonCondition();
     }
 
+    // Parse a directive argument: name=value
+    DirectiveArg parseDirectiveArg() {
+        DirectiveArg arg;
+        arg.name = parseIdentifier();
+        arg.loc = arg.name.loc;
+        expect(Token::Equals, "= in directive argument");
+
+        // Value can be a number, string, or boolean (true/false keywords)
+        if (tok_.type == Token::Integer || tok_.type == Token::Float) {
+            arg.value = parseNumber();
+        } else if (tok_.type == Token::String) {
+            arg.value = parseString();
+        } else if (tok_.type == Token::Identifier) {
+            std::string val = tok_.text;
+            if (val == "true" || val == "True") {
+                advance();
+                arg.value = true;
+            } else if (val == "false" || val == "False") {
+                advance();
+                arg.value = false;
+            } else {
+                errorHere("expected number, string, or boolean (true/false) for directive argument value");
+            }
+        } else {
+            errorHere("expected number, string, or boolean for directive argument value");
+        }
+        return arg;
+    }
+
+    // Parse a query directive: @directiveName(arg1=val1, arg2=val2, ...)
+    std::optional<QueryDirective> parseQueryDirective() {
+        if (!accept(Token::At)) {
+            return std::nullopt;
+        }
+
+        QueryDirective dir;
+        dir.loc = tok_.loc;
+        dir.name = parseIdentifier();
+        expect(Token::LParen, "( after directive name");
+
+        // Parse arguments
+        if (tok_.type != Token::RParen) {
+            dir.args.push_back(parseDirectiveArg());
+            while (accept(Token::Comma)) {
+                dir.args.push_back(parseDirectiveArg());
+            }
+        }
+        expect(Token::RParen, ") to close directive");
+
+        return dir;
+    }
+
     // Parse a Datalog constant minimally into a StringLiteral (uppercase identifiers or numbers or strings)
     StringLiteral parseDatalogConstant() {
         if (tok_.type == Token::String) {
@@ -875,7 +927,9 @@ private:
             DatalogAtom head = parseAtom();
             // Datalog query: Atom? or Atom, body...? (conjunctive query with comparisons)
             if (accept(Token::Question)) {
-                Query q; q.target = head; q.loc = head.loc; return q;
+                Query q; q.target = head; q.loc = head.loc;
+                q.directive = parseQueryDirective();
+                return q;
             }
             if (accept(Token::LArrow)) {
                 // parse body: elements are either Atom, Negation, or Condition (comparison of tensor expressions)
@@ -895,7 +949,9 @@ private:
                     conj.push_back(parseRuleBodyElement());
                 } while (tok_.type == Token::Comma);
                 expect(Token::Question, "'?' to end query");
-                Query q; q.target = head; q.body = std::move(conj); q.loc = head.loc; return q;
+                Query q; q.target = head; q.body = std::move(conj); q.loc = head.loc;
+                q.directive = parseQueryDirective();
+                return q;
             }
             // else, treat as fact if constants only
             if (allConstants(head)) {
@@ -925,7 +981,9 @@ private:
         TensorRef lhs = parseTensorRef();
         // Check if this is a query: tensor_ref?
         if (accept(Token::Question)) {
-            Query q; q.target = lhs; q.loc = lhs.loc; return q;
+            Query q; q.target = lhs; q.loc = lhs.loc;
+            q.directive = parseQueryDirective();
+            return q;
         }
         // Parse projection operator: '=', '+=', 'avg=', 'max=', 'min='
         std::string proj = "=";

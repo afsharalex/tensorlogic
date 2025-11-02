@@ -5,6 +5,7 @@
 #include "TL/Runtime/ExecutorRegistry.hpp"
 #include "TL/Runtime/PreprocessorRegistry.hpp"
 #include "TL/Runtime/DatalogEngine.hpp"
+#include "TL/Runtime/LearningEngine.hpp"
 
 #include <memory>
 #include <string>
@@ -102,6 +103,8 @@ private:
   PreprocessorRegistry preprocessor_registry_;
   ExecutorRegistry executor_registry_;
   DatalogEngine datalog_engine_;
+  std::unique_ptr<LearningEngine> learning_engine_;
+  Program current_program_;  // Store current program for learning directives
 };
 
 } // namespace tl
