@@ -22,7 +22,11 @@ bool DatalogEngine::addFact(const DatalogFact& fact) {
             oss << "Added fact: " << fact.relation.name << "(";
             for (size_t i = 0; i < fact.constants.size(); ++i) {
                 if (i) oss << ", ";
-                oss << fact.constants[i].text;
+                if (auto* sl = std::get_if<StringLiteral>(&fact.constants[i])) {
+                    oss << sl->text;
+                } else if (auto* nl = std::get_if<NumberLiteral>(&fact.constants[i])) {
+                    oss << nl->text;
+                }
             }
             oss << ")";
             debugLog(oss.str());

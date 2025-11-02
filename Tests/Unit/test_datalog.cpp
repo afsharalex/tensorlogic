@@ -374,3 +374,87 @@ TEST_CASE("Datalog negation in conjunctive query", "[datalog][query][negation]")
     // Should parse and execute without throwing; we don't assert specific output here
     REQUIRE_NOTHROW(vm.execute(prog));
 }
+
+TEST_CASE("Datalog float constants in facts", "[datalog][facts][float]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+    auto prog = parseProgram(R"(
+        Temperature(Room1, 72.5)
+        Temperature(Room2, 68.3)
+        Temperature(Room3, 75.0)
+    )");
+    vm.execute(prog);
+
+    REQUIRE(hasFact(vm.env(), "Temperature", {"Room1", "72.5"}));
+    REQUIRE(hasFact(vm.env(), "Temperature", {"Room2", "68.3"}));
+    REQUIRE(hasFact(vm.env(), "Temperature", {"Room3", "75.0"}));
+}
+
+TEST_CASE("Datalog integer constants in facts", "[datalog][facts][integer]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+    auto prog = parseProgram(R"(
+        Age(Alice, 25)
+        Age(Bob, 30)
+        Age(Charlie, 35)
+    )");
+    vm.execute(prog);
+
+    REQUIRE(hasFact(vm.env(), "Age", {"Alice", "25"}));
+    REQUIRE(hasFact(vm.env(), "Age", {"Bob", "30"}));
+    REQUIRE(hasFact(vm.env(), "Age", {"Charlie", "35"}));
+}
+
+TEST_CASE("Datalog mixed string and numeric constants", "[datalog][facts][mixed]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+    auto prog = parseProgram(R"(
+        Coordinate(Point1, 3.14, 2.71)
+        Coordinate(Point2, 1.41, 1.73)
+        Score(Alice, 95)
+        Score(Bob, 87.5)
+    )");
+    vm.execute(prog);
+
+    REQUIRE(hasFact(vm.env(), "Coordinate", {"Point1", "3.14", "2.71"}));
+    REQUIRE(hasFact(vm.env(), "Coordinate", {"Point2", "1.41", "1.73"}));
+    REQUIRE(hasFact(vm.env(), "Score", {"Alice", "95"}));
+    REQUIRE(hasFact(vm.env(), "Score", {"Bob", "87.5"}));
+}
+
+TEST_CASE("Datalog rule with numeric constants", "[datalog][rules][numeric]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+    auto prog = parseProgram(R"(
+        Temperature(Room1, 72.5)
+        Temperature(Room2, 68.3)
+        Temperature(Room3, 75.0)
+
+        Comfortable(r) <- Temperature(r, t), t >= 70, t <= 74
+
+        Comfortable(x)?
+    )");
+    vm.execute(prog);
+
+    // Room1 at 72.5 is comfortable
+    REQUIRE(hasFact(vm.env(), "Comfortable", {"Room1"}));
+    // Room2 at 68.3 is too cold
+    REQUIRE_FALSE(hasFact(vm.env(), "Comfortable", {"Room2"}));
+    // Room3 at 75.0 is too hot
+    REQUIRE_FALSE(hasFact(vm.env(), "Comfortable", {"Room3"}));
+}
+
+TEST_CASE("Datalog query with numeric constants", "[datalog][query][numeric]") {
+    std::stringstream out, err;
+    TensorLogicVM vm{&out, &err};
+    auto prog = parseProgram(R"(
+        Price(Apple, 1.50)
+        Price(Banana, 0.75)
+        Price(Orange, 2.00)
+
+        Price(x, p), p < 1.0?
+    )");
+
+    // Should parse and execute without throwing
+    REQUIRE_NOTHROW(vm.execute(prog));
+}
