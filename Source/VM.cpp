@@ -88,7 +88,13 @@ bool Environment::addFact(const std::string &relation, const std::vector<std::st
 bool Environment::addFact(const DatalogFact &f) {
   std::vector<std::string> tuple;
   tuple.reserve(f.constants.size());
-  for (const auto &c : f.constants) tuple.push_back(c.text);
+  for (const auto &c : f.constants) {
+    if (auto* sl = std::get_if<StringLiteral>(&c)) {
+      tuple.push_back(sl->text);
+    } else if (auto* nl = std::get_if<NumberLiteral>(&c)) {
+      tuple.push_back(nl->text);
+    }
+  }
   return addFact(f.relation.name, tuple);
 }
 

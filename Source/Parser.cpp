@@ -601,9 +601,12 @@ private:
         // Check for arithmetic expressions (binary operators indicate complex expression)
         // Parse primary term first
         if (tok_.type == Token::String) {
-            return parseDatalogConstant();
+            auto constant = parseDatalogConstant();
+            // parseDatalogConstant returns variant<StringLiteral, NumberLiteral>
+            // For strings, it returns StringLiteral
+            return std::get<StringLiteral>(constant);
         }
-        if (tok_.type == Token::Integer) {
+        if (tok_.type == Token::Integer || tok_.type == Token::Float) {
             // Check if this is part of an arithmetic expression
             auto num = parseNumber();
             // Check for arithmetic operators
@@ -618,13 +621,15 @@ private:
                 expr = parseDatalogArithmeticFrom(expr);
                 return expr;
             }
-            // Just a constant number
+            // Just a constant number - return as StringLiteral for now
             return StringLiteral{num.text, num.loc};
         }
         if (tok_.type == Token::Identifier) {
             if (startsWithUpper(tok_.text)) {
                 // constant (uppercase identifier)
-                return parseDatalogConstant();
+                auto constant = parseDatalogConstant();
+                // For uppercase identifiers, it returns StringLiteral
+                return std::get<StringLiteral>(constant);
             } else {
                 // variable (lowercase identifier) or part of arithmetic expression
                 auto id = parseLowercaseIdentifier();
@@ -762,8 +767,16 @@ private:
     static bool allConstants(const DatalogAtom& a) {
         return std::all_of(a.terms.begin(), a.terms.end(),
                            [](const auto &t) {
-                               // Constants are StringLiterals (not Identifiers, not ExprPtr)
-                               return std::holds_alternative<StringLiteral>(t);
+                               // Constants are StringLiterals (not Identifiers, not general ExprPtr)
+                               // But we also accept simple number literals (ExprPtr containing only ExprNumber)
+                               if (std::holds_alternative<StringLiteral>(t)) {
+                                   return true;
+                               }
+                               // Check if it's an expression containing just a number
+                               if (auto* expr = std::get_if<ExprPtr>(&t)) {
+                                   return std::holds_alternative<ExprNumber>((*expr)->node);
+                               }
+                               return false;
                            });
     }
 
@@ -861,20 +874,19 @@ private:
         return dir;
     }
 
-    // Parse a Datalog constant minimally into a StringLiteral (uppercase identifiers or numbers or strings)
-    StringLiteral parseDatalogConstant() {
+    // Parse a Datalog constant into a StringLiteral or NumberLiteral (uppercase identifiers, numbers, or strings)
+    std::variant<StringLiteral, NumberLiteral> parseDatalogConstant() {
         if (tok_.type == Token::String) {
             return parseString();
         }
-        if (tok_.type == Token::Integer) {
-            NumberLiteral n = parseNumber();
-            return StringLiteral{n.text, n.loc};
+        if (tok_.type == Token::Integer || tok_.type == Token::Float) {
+            return parseNumber();
         }
         if (tok_.type == Token::Identifier && startsWithUpper(tok_.text)) {
             const Identifier id = parseIdentifier();
             return StringLiteral{id.name, id.loc};
         }
-        errorHere("datalog constant expected (String, Integer, or Uppercase Identifier)");
+        errorHere("datalog constant expected (String, Number, or Uppercase Identifier)");
         // Unreachable
         // return {};
     }
@@ -882,7 +894,19 @@ private:
     static DatalogFact convertAtomToFact(const DatalogAtom& a) {
         DatalogFact f; f.relation = a.relation; f.loc = a.loc;
         for (const auto& t : a.terms) {
-            f.constants.push_back(std::get<StringLiteral>(t));
+            if (auto* sl = std::get_if<StringLiteral>(&t)) {
+                f.constants.push_back(*sl);
+            } else if (auto* id = std::get_if<Identifier>(&t)) {
+                // If the term is an Identifier (shouldn't happen for facts, but handle it)
+                f.constants.push_back(StringLiteral{id->name, id->loc});
+            } else if (auto* expr = std::get_if<ExprPtr>(&t)) {
+                // If the term is an expression, try to extract number literal
+                if (auto* exprNum = std::get_if<ExprNumber>(&(*expr)->node)) {
+                    f.constants.push_back(exprNum->literal);
+                } else {
+                    throw ParseError("Datalog facts can only contain constants (not expressions)");
+                }
+            }
         }
         return f;
     }

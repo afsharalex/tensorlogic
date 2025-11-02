@@ -171,7 +171,7 @@ struct Query {
     SourceLocation loc{};
 };
 
-struct DatalogFact { Identifier relation; std::vector<StringLiteral> constants; SourceLocation loc{}; };
+struct DatalogFact { Identifier relation; std::vector<std::variant<StringLiteral, NumberLiteral>> constants; SourceLocation loc{}; };
 
 struct DatalogCondition { ExprPtr lhs; std::string op; ExprPtr rhs; SourceLocation loc{}; };
 

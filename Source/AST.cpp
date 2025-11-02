@@ -182,7 +182,12 @@ std::string toString(const Statement& st) {
             std::ostringstream oss; oss << f.relation.name << '(';
             for (size_t i = 0; i < f.constants.size(); ++i) {
                 if (i) oss << ",";
-                oss << f.constants[i].text; // constants stored as strings without quotes
+                // constants can be StringLiteral or NumberLiteral
+                if (auto* sl = std::get_if<StringLiteral>(&f.constants[i])) {
+                    oss << sl->text;
+                } else if (auto* nl = std::get_if<NumberLiteral>(&f.constants[i])) {
+                    oss << nl->text;
+                }
             }
             oss << ')';
             return oss.str();
