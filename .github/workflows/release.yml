@@ -1,0 +1,261 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v1.0.0
+  workflow_dispatch:  # Allow manual triggering
+    inputs:
+      tag_name:
+        description: 'Tag name for release (e.g., v1.0.0)'
+        required: true
+        type: string
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-20.04
+            artifact_name: tensorlogic-linux-x86_64
+            asset_extension: tar.gz
+          - os: macos-latest
+            artifact_name: tensorlogic-macos-universal
+            asset_extension: tar.gz
+          - os: windows-latest
+            artifact_name: tensorlogic-windows-x86_64
+            asset_extension: zip
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up CMake
+      uses: jwlawson/actions-setup-cmake@v2
+      with:
+        cmake-version: '3.20.x'
+
+    - name: Install Linux dependencies
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential
+
+    - name: Configure CMake
+      run: cmake --preset default -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+
+    - name: Build
+      run: cmake --build build --config ${{ env.BUILD_TYPE }} -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+
+    - name: Run tests
+      run: |
+        cd build
+        ctest --output-on-failure -C ${{ env.BUILD_TYPE }}
+
+    - name: Package Linux/macOS
+      if: runner.os != 'Windows'
+      run: |
+        mkdir -p release/${{ matrix.artifact_name }}
+        cp build/tl release/${{ matrix.artifact_name }}/
+        cp build/tl_tests release/${{ matrix.artifact_name }}/
+        cp README.md release/${{ matrix.artifact_name }}/
+        cp LICENSE release/${{ matrix.artifact_name }}/ 2>/dev/null || echo "No LICENSE file"
+
+        # Copy libtorch shared libraries
+        if [ "${{ runner.os }}" = "Linux" ]; then
+          mkdir -p release/${{ matrix.artifact_name }}/lib
+          cp -r build/_deps/libtorch-src/lib/*.so* release/${{ matrix.artifact_name }}/lib/ 2>/dev/null || true
+
+          # Create wrapper script
+          cat > release/${{ matrix.artifact_name }}/tl.sh << 'EOF'
+        #!/bin/bash
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        export LD_LIBRARY_PATH="$SCRIPT_DIR/lib:$LD_LIBRARY_PATH"
+        exec "$SCRIPT_DIR/tl" "$@"
+        EOF
+          chmod +x release/${{ matrix.artifact_name }}/tl.sh
+        elif [ "${{ runner.os }}" = "macOS" ]; then
+          mkdir -p release/${{ matrix.artifact_name }}/lib
+          cp -r build/_deps/libtorch-src/lib/*.dylib release/${{ matrix.artifact_name }}/lib/ 2>/dev/null || true
+
+          # Create wrapper script
+          cat > release/${{ matrix.artifact_name }}/tl.sh << 'EOF'
+        #!/bin/bash
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        export DYLD_LIBRARY_PATH="$SCRIPT_DIR/lib:$DYLD_LIBRARY_PATH"
+        exec "$SCRIPT_DIR/tl" "$@"
+        EOF
+          chmod +x release/${{ matrix.artifact_name }}/tl.sh
+        fi
+
+        cd release
+        tar -czf ${{ matrix.artifact_name }}.${{ matrix.asset_extension }} ${{ matrix.artifact_name }}
+        sha256sum ${{ matrix.artifact_name }}.${{ matrix.asset_extension }} > ${{ matrix.artifact_name }}.${{ matrix.asset_extension }}.sha256
+
+    - name: Package Windows
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        mkdir -p release/${{ matrix.artifact_name }}
+        cp build/Release/tl.exe release/${{ matrix.artifact_name }}/
+        cp build/Release/tl_tests.exe release/${{ matrix.artifact_name }}/
+        cp README.md release/${{ matrix.artifact_name }}/
+        cp LICENSE release/${{ matrix.artifact_name }}/ 2>/dev/null || echo "No LICENSE file"
+
+        # Copy libtorch DLLs
+        mkdir -p release/${{ matrix.artifact_name }}/lib
+        find build/_deps/libtorch-src/lib -name "*.dll" -exec cp {} release/${{ matrix.artifact_name }}/lib/ \; 2>/dev/null || true
+
+        # Create batch wrapper script
+        cat > release/${{ matrix.artifact_name }}/tl.bat << 'EOF'
+        @echo off
+        set "SCRIPT_DIR=%~dp0"
+        set "PATH=%SCRIPT_DIR%lib;%PATH%"
+        "%SCRIPT_DIR%tl.exe" %*
+        EOF
+
+        cd release
+        7z a -tzip ${{ matrix.artifact_name }}.${{ matrix.asset_extension }} ${{ matrix.artifact_name }}
+        sha256sum ${{ matrix.artifact_name }}.${{ matrix.asset_extension }} > ${{ matrix.artifact_name }}.${{ matrix.asset_extension }}.sha256
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.artifact_name }}
+        path: release/${{ matrix.artifact_name }}.${{ matrix.asset_extension }}
+
+    - name: Upload checksum
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.artifact_name }}-checksum
+        path: release/${{ matrix.artifact_name }}.${{ matrix.asset_extension }}.sha256
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Prepare release assets
+      run: |
+        mkdir -p release-assets
+        find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" \) -exec cp {} release-assets/ \;
+        ls -lh release-assets/
+
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        cat > release-notes.md << 'EOF'
+        ## TensorLogic Release
+
+        ### Downloads
+
+        Choose the appropriate binary for your platform:
+
+        - **Linux (x86_64)**: `tensorlogic-linux-x86_64.tar.gz`
+        - **macOS (Universal)**: `tensorlogic-macos-universal.tar.gz`
+        - **Windows (x86_64)**: `tensorlogic-windows-x86_64.zip`
+
+        All releases include SHA256 checksums for verification.
+
+        ### Installation
+
+        #### Linux / macOS
+        ```bash
+        # Extract the archive
+        tar -xzf tensorlogic-*.tar.gz
+        cd tensorlogic-*
+
+        # Run using the wrapper script (handles library paths)
+        ./tl.sh --help
+
+        # Or add to PATH
+        echo 'export PATH="$PWD:$PATH"' >> ~/.bashrc
+        source ~/.bashrc
+        tl.sh --help
+        ```
+
+        #### Windows
+        ```cmd
+        # Extract the ZIP file
+        # Run using the batch wrapper
+        tl.bat --help
+
+        # Or add directory to PATH for system-wide access
+        ```
+
+        ### Verification
+
+        Verify downloads using SHA256 checksums:
+        ```bash
+        # Linux/macOS
+        sha256sum -c tensorlogic-*.sha256
+
+        # Windows (PowerShell)
+        Get-FileHash tensorlogic-*.zip -Algorithm SHA256
+        ```
+
+        ### What's Included
+
+        - `tl` / `tl.exe` - Main TensorLogic interpreter
+        - `tl_tests` / `tl_tests.exe` - Test suite
+        - `lib/` - Required libtorch shared libraries
+        - `tl.sh` / `tl.bat` - Wrapper scripts for correct library loading
+        - `README.md` - Documentation
+
+        ### Usage
+
+        ```bash
+        # Run a TensorLogic program
+        ./tl.sh program.tl
+
+        # Enable debug mode
+        ./tl.sh --debug program.tl
+
+        # Run tests
+        ./tl_tests
+        ```
+
+        ### System Requirements
+
+        - **Linux**: glibc 2.27+ (Ubuntu 18.04+, CentOS 8+)
+        - **macOS**: macOS 11.0+ (Big Sur or later)
+        - **Windows**: Windows 10+ (64-bit)
+        - **RAM**: Minimum 4GB, 8GB+ recommended
+        - **Disk**: ~500MB for binaries + libraries
+
+        ### Notes
+
+        - GPU support (CUDA/MPS) is included where available
+        - For compilation from source, see [BUILD.md](BUILD.md)
+        EOF
+
+        echo "Release notes generated"
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name || inputs.tag_name }}
+        name: TensorLogic ${{ github.ref_name || inputs.tag_name }}
+        body_path: release-notes.md
+        draft: false
+        prerelease: false
+        files: |
+          release-assets/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
