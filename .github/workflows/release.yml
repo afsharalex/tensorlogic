@@ -27,9 +27,6 @@ jobs:
           - os: macos-latest
             artifact_name: tensorlogic-macos-universal
             asset_extension: tar.gz
-          - os: windows-latest
-            artifact_name: tensorlogic-windows-x86_64
-            asset_extension: zip
 
     steps:
     - name: Checkout code
@@ -49,22 +46,15 @@ jobs:
     - name: Configure CMake
       run: cmake --preset default -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
 
-    - name: Build Linux/macOS
-      if: runner.os != 'Windows'
+    - name: Build
       run: cmake --build build --config ${{ env.BUILD_TYPE }} -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
-
-    - name: Build Windows
-      if: runner.os == 'Windows'
-      shell: powershell
-      run: cmake --build build --config ${{ env.BUILD_TYPE }} -j $env:NUMBER_OF_PROCESSORS
 
     - name: Run tests
       run: |
         cd build
         ctest --output-on-failure -C ${{ env.BUILD_TYPE }}
 
-    - name: Package Linux/macOS
-      if: runner.os != 'Windows'
+    - name: Package
       run: |
         mkdir -p release/${{ matrix.artifact_name }}
         cp build/tl release/${{ matrix.artifact_name }}/
@@ -103,33 +93,6 @@ jobs:
         tar -czf ${{ matrix.artifact_name }}.${{ matrix.asset_extension }} ${{ matrix.artifact_name }}
         sha256sum ${{ matrix.artifact_name }}.${{ matrix.asset_extension }} > ${{ matrix.artifact_name }}.${{ matrix.asset_extension }}.sha256
 
-    - name: Package Windows
-      if: runner.os == 'Windows'
-      shell: bash
-      run: |
-        mkdir -p release/${{ matrix.artifact_name }}
-        cp build/Release/tl.exe release/${{ matrix.artifact_name }}/ || cp build/tl.exe release/${{ matrix.artifact_name }}/
-        cp build/Release/tl_tests.exe release/${{ matrix.artifact_name }}/ || cp build/tl_tests.exe release/${{ matrix.artifact_name }}/
-        cp README.md release/${{ matrix.artifact_name }}/
-        cp LICENSE release/${{ matrix.artifact_name }}/ 2>/dev/null || echo "No LICENSE file"
-
-        # Copy libtorch DLLs - check multiple possible locations
-        mkdir -p release/${{ matrix.artifact_name }}/lib
-        find build/_deps/libtorch-src/lib -name "*.dll" -exec cp {} release/${{ matrix.artifact_name }}/lib/ \; 2>/dev/null || true
-        find build/_deps/libtorch-src/bin -name "*.dll" -exec cp {} release/${{ matrix.artifact_name }}/lib/ \; 2>/dev/null || true
-
-        # Create batch wrapper script
-        cat > release/${{ matrix.artifact_name }}/tl.bat << 'EOF'
-        @echo off
-        set "SCRIPT_DIR=%~dp0"
-        set "PATH=%SCRIPT_DIR%lib;%PATH%"
-        "%SCRIPT_DIR%tl.exe" %*
-        EOF
-
-        cd release
-        7z a -tzip ${{ matrix.artifact_name }}.${{ matrix.asset_extension }} ${{ matrix.artifact_name }}
-        sha256sum ${{ matrix.artifact_name }}.${{ matrix.asset_extension }} > ${{ matrix.artifact_name }}.${{ matrix.asset_extension }}.sha256
-
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
@@ -161,7 +124,7 @@ jobs:
     - name: Prepare release assets
       run: |
         mkdir -p release-assets
-        find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" \) -exec cp {} release-assets/ \;
+        find artifacts -type f \( -name "*.tar.gz" -o -name "*.sha256" \) -exec cp {} release-assets/ \;
         ls -lh release-assets/
 
     - name: Generate release notes
@@ -176,13 +139,11 @@ jobs:
 
         - **Linux (x86_64)**: `tensorlogic-linux-x86_64.tar.gz`
         - **macOS (Universal)**: `tensorlogic-macos-universal.tar.gz`
-        - **Windows (x86_64)**: `tensorlogic-windows-x86_64.zip`
 
         All releases include SHA256 checksums for verification.
 
         ### Installation
 
-        #### Linux / macOS
         ```bash
         # Extract the archive
         tar -xzf tensorlogic-*.tar.gz
@@ -197,32 +158,19 @@ jobs:
         tl.sh --help
         ```
 
-        #### Windows
-        ```cmd
-        # Extract the ZIP file
-        # Run using the batch wrapper
-        tl.bat --help
-
-        # Or add directory to PATH for system-wide access
-        ```
-
         ### Verification
 
         Verify downloads using SHA256 checksums:
         ```bash
-        # Linux/macOS
         sha256sum -c tensorlogic-*.sha256
-
-        # Windows (PowerShell)
-        Get-FileHash tensorlogic-*.zip -Algorithm SHA256
         ```
 
         ### What's Included
 
-        - `tl` / `tl.exe` - Main TensorLogic interpreter
-        - `tl_tests` / `tl_tests.exe` - Test suite
+        - `tl` - Main TensorLogic interpreter
+        - `tl_tests` - Test suite
         - `lib/` - Required libtorch shared libraries
-        - `tl.sh` / `tl.bat` - Wrapper scripts for correct library loading
+        - `tl.sh` - Wrapper script for correct library loading
         - `README.md` - Documentation
 
         ### Usage
@@ -240,15 +188,15 @@ jobs:
 
         ### System Requirements
 
-        - **Linux**: glibc 2.27+ (Ubuntu 18.04+, CentOS 8+)
+        - **Linux**: glibc 2.27+ (Ubuntu 18.04+, CentOS 8+, Arch Linux)
         - **macOS**: macOS 11.0+ (Big Sur or later)
-        - **Windows**: Windows 10+ (64-bit)
         - **RAM**: Minimum 4GB, 8GB+ recommended
         - **Disk**: ~500MB for binaries + libraries
 
         ### Notes
 
         - GPU support (CUDA/MPS) is included where available
+        - Binaries are distribution-agnostic (work on Ubuntu, Debian, Arch, Fedora, etc.)
         - For compilation from source, see [BUILD.md](BUILD.md)
         EOF
 
