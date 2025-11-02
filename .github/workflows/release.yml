@@ -49,8 +49,14 @@ jobs:
     - name: Configure CMake
       run: cmake --preset default -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
 
-    - name: Build
+    - name: Build Linux/macOS
+      if: runner.os != 'Windows'
       run: cmake --build build --config ${{ env.BUILD_TYPE }} -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+
+    - name: Build Windows
+      if: runner.os == 'Windows'
+      shell: powershell
+      run: cmake --build build --config ${{ env.BUILD_TYPE }} -j $env:NUMBER_OF_PROCESSORS
 
     - name: Run tests
       run: |
@@ -102,14 +108,15 @@ jobs:
       shell: bash
       run: |
         mkdir -p release/${{ matrix.artifact_name }}
-        cp build/Release/tl.exe release/${{ matrix.artifact_name }}/
-        cp build/Release/tl_tests.exe release/${{ matrix.artifact_name }}/
+        cp build/Release/tl.exe release/${{ matrix.artifact_name }}/ || cp build/tl.exe release/${{ matrix.artifact_name }}/
+        cp build/Release/tl_tests.exe release/${{ matrix.artifact_name }}/ || cp build/tl_tests.exe release/${{ matrix.artifact_name }}/
         cp README.md release/${{ matrix.artifact_name }}/
         cp LICENSE release/${{ matrix.artifact_name }}/ 2>/dev/null || echo "No LICENSE file"
 
-        # Copy libtorch DLLs
+        # Copy libtorch DLLs - check multiple possible locations
         mkdir -p release/${{ matrix.artifact_name }}/lib
         find build/_deps/libtorch-src/lib -name "*.dll" -exec cp {} release/${{ matrix.artifact_name }}/lib/ \; 2>/dev/null || true
+        find build/_deps/libtorch-src/bin -name "*.dll" -exec cp {} release/${{ matrix.artifact_name }}/lib/ \; 2>/dev/null || true
 
         # Create batch wrapper script
         cat > release/${{ matrix.artifact_name }}/tl.bat << 'EOF'
