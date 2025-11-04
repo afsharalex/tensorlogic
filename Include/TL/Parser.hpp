@@ -487,10 +487,7 @@ struct body_literal_list : pegtl::list<body_literal, pegtl::one<','>, ws> {};
 // Datalog rule: Head <- Body1, Body2, ...
 struct datalog_rule : pegtl::seq<
     datalog_atom,
-    pad<pegtl::sor<
-        pegtl::string<'<', '-'>,
-        pegtl::one<0x2190>  // Unicode ←
-    >>,
+    pad<pegtl::string<'<', '-'>>,  // Just use <- for now (Unicode support needs utf8::one)
     pad<body_literal_list>
 > {};
 
