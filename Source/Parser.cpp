@@ -1,159 +1,24 @@
 #include "TL/Parser.hpp"
+#include "TL/Grammar.hpp"
+#include "TL/ParserActions.hpp"
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <algorithm>
 
-// Minimal PEGTL parser implementation
-// Following the proven pattern from Lexer.cpp
+// TensorLogic PEGTL Parser Implementation
+// Grammar rules are in Include/TL/Grammar.hpp
+// This file contains action implementations and the public API
 
-namespace tl::parse {
+namespace tl::actions {
 
 namespace pegtl = tao::pegtl;
+using namespace tl::grammar;
 
-// Helper: Create source location from PEGTL position
-static SourceLocation locFrom(const pegtl::position& p) {
-    SourceLocation l;
-    l.line = p.line;
-    l.column = p.column;
-    return l;
-}
+// ============================================================================
+// LEXICAL ACTIONS
+// ============================================================================
 
-// ParseState - expanding for tensor equations
-struct ParseState {
-    // Literal stacks
-    std::vector<Identifier> identifier_stack;
-    std::vector<NumberLiteral> number_stack;
-
-    // Index stacks
-    std::vector<Index> index_stack;
-    std::vector<Slice> slice_stack;
-    std::vector<IndexOrSlice> index_or_slice_stack;
-
-    // Expression stack
-    std::vector<ExprPtr> expr_stack;
-
-    // Tensor stacks
-    std::vector<TensorRef> tensorref_stack;
-
-    // Guard stacks
-    std::vector<GuardedClause> clause_stack;
-
-    // Top-level
-    std::vector<Statement> statements;
-
-    // Temporary state
-    std::string current_projection_op;
-};
-
-// Grammar rules - expanding for tensor equations
-
-// Whitespace includes spaces, tabs, newlines, and carriage returns
-struct ws : pegtl::star<pegtl::sor<
-    pegtl::one<' '>,
-    pegtl::one<'\t'>,
-    pegtl::one<'\n'>,
-    pegtl::one<'\r'>
->> {};
-
-template<typename Rule>
-struct pad : pegtl::seq<ws, Rule, ws> {};
-
-// Lexical elements
-struct identifier : pegtl::seq<
-    pegtl::alpha,
-    pegtl::star<pegtl::sor<pegtl::alnum, pegtl::one<'_'>>>
-> {};
-
-struct integer_literal : pegtl::plus<pegtl::digit> {};
-
-struct float_literal : pegtl::seq<
-    pegtl::plus<pegtl::digit>,
-    pegtl::one<'.'>,
-    pegtl::star<pegtl::digit>
-> {};
-
-struct number_literal : pegtl::sor<float_literal, integer_literal> {};
-
-// Indices
-struct simple_index : pegtl::sor<identifier, integer_literal> {};
-
-// Slices: 0:10, 0:10:2, :, ::2, 0:, :10
-struct slice : pegtl::seq<
-    pegtl::opt<integer_literal>,
-    pegtl::one<':'>,
-    pegtl::opt<integer_literal>,
-    pegtl::opt<pegtl::seq<pegtl::one<':'>, integer_literal>>
-> {};
-
-// Index or slice in brackets
-struct index_or_slice : pegtl::sor<slice, simple_index> {};
-
-struct index_list : pegtl::list<pad<index_or_slice>, pegtl::one<','>> {};
-
-// Tensor references
-struct tensor_ref : pegtl::seq<
-    identifier,
-    pegtl::opt<pegtl::seq<
-        pegtl::one<'['>,
-        index_list,
-        pegtl::one<']'>
-    >>
-> {};
-
-// Expressions
-struct primary_expression : pegtl::sor<tensor_ref, number_literal> {};
-
-// Horizontal whitespace (space and tab only, not newlines)
-struct hws : pegtl::star<pegtl::sor<pegtl::one<' '>, pegtl::one<'\t'>>> {};
-
-// Implicit multiplication: A B C means A * B * C
-// Multiple expressions separated by at least one horizontal space (not newline!)
-struct rhs_expression : pegtl::seq<
-    hws,
-    primary_expression,
-    pegtl::star<pegtl::seq<
-        pegtl::plus<pegtl::sor<pegtl::one<' '>, pegtl::one<'\t'>>>,  // At least one space/tab
-        primary_expression
-    >>,
-    hws
-> {};
-
-// Guarded clause
-struct guarded_clause : rhs_expression {};
-
-// Projection operators
-struct projection_op : pegtl::sor<
-    pegtl::string<'m', 'a', 'x', '='>,
-    pegtl::string<'m', 'i', 'n', '='>,
-    pegtl::string<'a', 'v', 'g', '='>,
-    pegtl::string<'+', '='>,
-    pegtl::one<'='>
-> {};
-
-// Tensor equation
-struct tensor_equation : pegtl::seq<
-    tensor_ref,
-    pad<projection_op>,
-    guarded_clause
-> {};
-
-// Statement
-struct statement : pegtl::sor<tensor_equation> {};
-
-// Program with multiple statements
-// Use star instead of list to avoid separator issues
-struct program : pegtl::seq<
-    pegtl::star<pegtl::seq<ws, statement, ws>>,
-    pegtl::eof
-> {};
-
-struct grammar : program {};
-
-// Actions - following Lexer.cpp pattern exactly
-template<typename Rule>
-struct action : pegtl::nothing<Rule> {};
-
-// Lexical actions
 template<>
 struct action<identifier> {
     template<typename Input>
@@ -187,7 +52,10 @@ struct action<float_literal> {
     }
 };
 
-// Index actions
+// ============================================================================
+// INDEX AND SLICE ACTIONS
+// ============================================================================
+
 template<>
 struct action<simple_index> {
     template<typename Input>
@@ -211,7 +79,6 @@ struct action<simple_index> {
     }
 };
 
-// Slice action
 template<>
 struct action<slice> {
     template<typename Input>
@@ -287,7 +154,10 @@ struct action<slice> {
     }
 };
 
-// Tensor ref action
+// ============================================================================
+// TENSOR REFERENCE ACTIONS
+// ============================================================================
+
 template<>
 struct action<tensor_ref> {
     template<typename Input>
@@ -309,7 +179,10 @@ struct action<tensor_ref> {
     }
 };
 
-// Expression actions
+// ============================================================================
+// EXPRESSION ACTIONS
+// ============================================================================
+
 template<>
 struct action<primary_expression> {
     template<typename Input>
@@ -332,14 +205,12 @@ struct action<primary_expression> {
     }
 };
 
-// Note: rhs_expression action not needed since guarded_clause handles it
-// (guarded_clause is currently just an alias for rhs_expression)
-
 template<>
 struct action<guarded_clause> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
-        // First, handle implicit multiplication (same logic as rhs_expression)
+        // First, handle implicit multiplication
+        // Multiple expressions on the stack means implicit multiplication: A B C = A * B * C
         if (state.expr_stack.size() > 1) {
             // Expressions are pushed onto stack in parse order (A, then B, then C...)
             // Build left-to-right: ((A * B) * C) * D
@@ -374,6 +245,10 @@ struct action<guarded_clause> {
     }
 };
 
+// ============================================================================
+// TENSOR EQUATION ACTIONS
+// ============================================================================
+
 template<>
 struct action<projection_op> {
     template<typename Input>
@@ -407,19 +282,22 @@ struct action<tensor_equation> {
     }
 };
 
-} // namespace tl::parse
+} // namespace tl::actions
 
-// Public API implementation
+// ============================================================================
+// PUBLIC API
+// ============================================================================
+
 namespace tl {
 
 Program parseProgram(std::string_view source) {
     namespace pegtl = tao::pegtl;
 
     pegtl::memory_input input(source, "<input>");
-    parse::ParseState state;
+    actions::ParseState state;
 
     try {
-        pegtl::parse<parse::grammar, parse::action>(input, state);
+        pegtl::parse<grammar::grammar, actions::action>(input, state);
     } catch (const pegtl::parse_error& e) {
         const auto& pos = e.positions().front();
         std::ostringstream oss;
