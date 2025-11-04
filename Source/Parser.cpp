@@ -26,6 +26,7 @@ struct ParseState {
 
     // Index stacks
     std::vector<Index> index_stack;
+    std::vector<Slice> slice_stack;
     std::vector<IndexOrSlice> index_or_slice_stack;
 
     // Expression stack
@@ -46,7 +47,13 @@ struct ParseState {
 
 // Grammar rules - expanding for tensor equations
 
-struct ws : pegtl::star<pegtl::space> {};
+// Whitespace includes spaces, tabs, newlines, and carriage returns
+struct ws : pegtl::star<pegtl::sor<
+    pegtl::one<' '>,
+    pegtl::one<'\t'>,
+    pegtl::one<'\n'>,
+    pegtl::one<'\r'>
+>> {};
 
 template<typename Rule>
 struct pad : pegtl::seq<ws, Rule, ws> {};
@@ -70,7 +77,18 @@ struct number_literal : pegtl::sor<float_literal, integer_literal> {};
 // Indices
 struct simple_index : pegtl::sor<identifier, integer_literal> {};
 
-struct index_list : pegtl::list<pad<simple_index>, pegtl::one<','>> {};
+// Slices: 0:10, 0:10:2, :, ::2, 0:, :10
+struct slice : pegtl::seq<
+    pegtl::opt<integer_literal>,
+    pegtl::one<':'>,
+    pegtl::opt<integer_literal>,
+    pegtl::opt<pegtl::seq<pegtl::one<':'>, integer_literal>>
+> {};
+
+// Index or slice in brackets
+struct index_or_slice : pegtl::sor<slice, simple_index> {};
+
+struct index_list : pegtl::list<pad<index_or_slice>, pegtl::one<','>> {};
 
 // Tensor references
 struct tensor_ref : pegtl::seq<
@@ -85,13 +103,19 @@ struct tensor_ref : pegtl::seq<
 // Expressions
 struct primary_expression : pegtl::sor<tensor_ref, number_literal> {};
 
+// Horizontal whitespace (space and tab only, not newlines)
+struct hws : pegtl::star<pegtl::sor<pegtl::one<' '>, pegtl::one<'\t'>>> {};
+
 // Implicit multiplication: A B C means A * B * C
-// Multiple expressions separated by at least one space
+// Multiple expressions separated by at least one horizontal space (not newline!)
 struct rhs_expression : pegtl::seq<
-    ws,
+    hws,
     primary_expression,
-    pegtl::star<pegtl::seq<pegtl::plus<pegtl::space>, primary_expression>>,
-    ws
+    pegtl::star<pegtl::seq<
+        pegtl::plus<pegtl::sor<pegtl::one<' '>, pegtl::one<'\t'>>>,  // At least one space/tab
+        primary_expression
+    >>,
+    hws
 > {};
 
 // Guarded clause
@@ -183,6 +207,82 @@ struct action<simple_index> {
         IndexOrSlice ios;
         ios.loc = idx.loc;
         ios.value = std::move(idx);
+        state.index_or_slice_stack.push_back(std::move(ios));
+    }
+};
+
+// Slice action
+template<>
+struct action<slice> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        Slice s;
+        s.loc = locFrom(in.position());
+
+        // Parse the matched string to understand structure
+        std::string slice_str = std::string(in.string());
+
+        // Count colons to determine if we have start:end or start:end:step
+        size_t colon_count = std::count(slice_str.begin(), slice_str.end(), ':');
+
+        // Collect numbers that were parsed for this slice
+        std::vector<NumberLiteral> nums;
+        while (!state.number_stack.empty() && nums.size() < 3) {
+            nums.push_back(state.number_stack.back());
+            state.number_stack.pop_back();
+        }
+
+        // Reverse to get them in parse order
+        std::reverse(nums.begin(), nums.end());
+
+        // Assign based on the structure of the slice string
+        if (colon_count == 1) {
+            // Format: [start]:[end]
+            if (slice_str[0] == ':') {
+                // Format: :end
+                if (!nums.empty()) s.end = nums[0];
+            } else if (slice_str.back() == ':') {
+                // Format: start:
+                if (!nums.empty()) s.start = nums[0];
+            } else {
+                // Format: start:end
+                if (nums.size() >= 1) s.start = nums[0];
+                if (nums.size() >= 2) s.end = nums[1];
+            }
+        } else if (colon_count == 2) {
+            // Format: [start]:[end]:step
+            size_t first_colon = slice_str.find(':');
+            size_t second_colon = slice_str.find(':', first_colon + 1);
+
+            if (first_colon == 0) {
+                // Format: :[end]:step or ::step
+                if (second_colon == 1) {
+                    // Format: ::step
+                    if (!nums.empty()) s.step = nums[0];
+                } else {
+                    // Format: :end:step
+                    if (nums.size() >= 1) s.end = nums[0];
+                    if (nums.size() >= 2) s.step = nums[1];
+                }
+            } else {
+                // Format: start:[end]:step or start::step
+                if (second_colon == first_colon + 1) {
+                    // Format: start::step
+                    if (nums.size() >= 1) s.start = nums[0];
+                    if (nums.size() >= 2) s.step = nums[1];
+                } else {
+                    // Format: start:end:step
+                    if (nums.size() >= 1) s.start = nums[0];
+                    if (nums.size() >= 2) s.end = nums[1];
+                    if (nums.size() >= 3) s.step = nums[2];
+                }
+            }
+        }
+
+        // Wrap in IndexOrSlice
+        IndexOrSlice ios;
+        ios.loc = s.loc;
+        ios.value = std::move(s);
         state.index_or_slice_stack.push_back(std::move(ios));
     }
 };
