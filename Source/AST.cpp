@@ -85,7 +85,7 @@ std::string toString(const Expr& e) {
             switch (b.op) {
                 case ExprBinary::Op::Add: return toString(*b.lhs) + "+" + toString(*b.rhs);
                 case ExprBinary::Op::Sub: return toString(*b.lhs) + "-" + toString(*b.rhs);
-                case ExprBinary::Op::Mul: return toString(*b.lhs) + toString(*b.rhs); // implicit multiplication
+                case ExprBinary::Op::Mul: return toString(*b.lhs) + "*" + toString(*b.rhs);
                 case ExprBinary::Op::Div: return toString(*b.lhs) + "/" + toString(*b.rhs);
                 case ExprBinary::Op::Mod: return toString(*b.lhs) + "%" + toString(*b.rhs);
                 case ExprBinary::Op::Pow: return toString(*b.lhs) + "^" + toString(*b.rhs);

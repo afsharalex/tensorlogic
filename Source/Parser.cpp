@@ -37,7 +37,13 @@ struct action<integer_literal> {
         NumberLiteral num;
         num.text = std::string(in.string());
         num.loc = locFrom(in.position());
-        state.number_stack.push_back(std::move(num));
+        state.number_stack.push_back(num);
+
+        // Also push as expression for use in arithmetic
+        auto expr = std::make_shared<Expr>();
+        expr->loc = num.loc;
+        expr->node = ExprNumber{num};
+        state.expr_stack.push_back(expr);
     }
 };
 
@@ -48,7 +54,13 @@ struct action<float_literal> {
         NumberLiteral num;
         num.text = std::string(in.string());
         num.loc = locFrom(in.position());
-        state.number_stack.push_back(std::move(num));
+        state.number_stack.push_back(num);
+
+        // Also push as expression for use in arithmetic
+        auto expr = std::make_shared<Expr>();
+        expr->loc = num.loc;
+        expr->node = ExprNumber{num};
+        state.expr_stack.push_back(expr);
     }
 };
 
@@ -187,21 +199,240 @@ template<>
 struct action<primary_expression> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
-        auto expr = std::make_shared<Expr>();
-        expr->loc = locFrom(in.position());
+        // Numbers and parenthesized expressions already push to expr_stack
+        // Only handle tensor_ref case: check if this matched a tensor_ref by seeing if tensorref was just added
 
-        // Pop from back (most recent) - standard LIFO
-        if (!state.tensorref_stack.empty()) {
-            auto ref = std::move(state.tensorref_stack.back());
+        // Simple heuristic: If matched text starts with a letter, it's a tensor_ref and needs conversion.
+        // If it starts with a digit or '(', it's already handled.
+        std::string text = std::string(in.string());
+        if (!text.empty() && std::isalpha(text[0]) && !state.tensorref_stack.empty()) {
+            auto expr = std::make_shared<Expr>();
+            expr->loc = locFrom(in.position());
+            expr->node = ExprTensorRef{state.tensorref_stack.back()};
             state.tensorref_stack.pop_back();
-            expr->node = ExprTensorRef{std::move(ref)};
-        } else if (!state.number_stack.empty()) {
-            auto num = std::move(state.number_stack.back());
-            state.number_stack.pop_back();
-            expr->node = ExprNumber{std::move(num)};
+            state.expr_stack.push_back(expr);
+        }
+    }
+};
+
+template<>
+struct action<unary_expression> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // If this matched the recursive case (- unary_expression), wrap in ExprUnary
+        std::string text = std::string(in.string());
+
+        // Simple heuristic: if starts with -, it's a negation
+        if (!text.empty() && (text[0] == '-' || (text.size() > 1 && std::isspace(text[0]) && text[1] == '-'))) {
+            if (!state.expr_stack.empty()) {
+                auto operand = state.expr_stack.back();
+                state.expr_stack.pop_back();
+
+                auto expr = std::make_shared<Expr>();
+                expr->loc = locFrom(in.position());
+
+                ExprUnary unary;
+                unary.op = ExprUnary::Op::Neg;
+                unary.operand = operand;
+                expr->node = std::move(unary);
+
+                state.expr_stack.push_back(expr);
+            }
+        }
+        // Otherwise it's just a primary expression, already on stack
+    }
+};
+
+template<>
+struct action<power_expression> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        std::string text = std::string(in.string());
+        // Check if ^ operator is present
+
+        if (text.find('^') != std::string::npos && state.expr_stack.size() >= 2) {
+            // Power is right-associative, so RHS is already fully formed
+            // Pop RHS, then LHS
+            auto rhs = state.expr_stack.back();
+            state.expr_stack.pop_back();
+            auto lhs = state.expr_stack.back();
+            state.expr_stack.pop_back();
+
+            auto expr = std::make_shared<Expr>();
+            expr->loc = lhs->loc;
+
+            ExprBinary binary;
+            binary.op = ExprBinary::Op::Pow;
+            binary.lhs = lhs;
+            binary.rhs = rhs;
+            expr->node = std::move(binary);
+
+            state.expr_stack.push_back(expr);
+        }
+        // Otherwise single operand, already on stack
+    }
+};
+
+template<>
+struct action<multiplicative_expression> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // Parse the input to find operators
+        std::string text = std::string(in.string());
+
+        // Count how many operators we have
+        size_t op_count = 0;
+        for (char c : text) {
+            if (c == '*' || c == '/' || c == '%') op_count++;
         }
 
-        state.expr_stack.push_back(expr);
+        if (op_count > 0 && state.expr_stack.size() > op_count) {
+            // Build left-to-right: ((A * B) / C) % D
+            // Bottom of relevant portion of stack has leftmost operand
+            size_t start_idx = state.expr_stack.size() - op_count - 1;
+            auto result = state.expr_stack[start_idx];
+
+            // Find operators in order from matched text
+            size_t operand_idx = start_idx + 1;
+            for (size_t pos = 0; pos < text.size() && operand_idx < state.expr_stack.size(); pos++) {
+                char c = text[pos];
+                if (c == '*' || c == '/' || c == '%') {
+                    auto binary = std::make_shared<Expr>();
+                    binary->loc = result->loc;
+
+                    ExprBinary bin;
+                    bin.op = (c == '*') ? ExprBinary::Op::Mul :
+                             (c == '/') ? ExprBinary::Op::Div :
+                                          ExprBinary::Op::Mod;
+                    bin.lhs = result;
+                    bin.rhs = state.expr_stack[operand_idx++];
+                    binary->node = std::move(bin);
+
+                    result = binary;
+                }
+            }
+
+            // Remove operands from stack and push result
+            state.expr_stack.erase(state.expr_stack.begin() + start_idx, state.expr_stack.end());
+            state.expr_stack.push_back(result);
+        }
+        // Otherwise single operand, already on stack
+    }
+};
+
+template<>
+struct action<additive_expression> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // Parse the input to find operators
+        std::string text = std::string(in.string());
+        std::cerr << "[DEBUG] additive_expression matched: '" << text << "'" << std::endl;
+        std::cerr << "[DEBUG] expr_stack.size() = " << state.expr_stack.size() << std::endl;
+
+        // Count how many operators we have (careful not to count unary minus)
+        size_t op_count = 0;
+        bool prev_was_op = true;  // Start of expression
+        for (size_t i = 0; i < text.size(); i++) {
+            char c = text[i];
+            if ((c == '+' || c == '-') && !prev_was_op) {
+                op_count++;
+                prev_was_op = true;
+            } else if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+                prev_was_op = false;
+            }
+        }
+
+        if (op_count > 0 && state.expr_stack.size() > op_count) {
+            // Build left-to-right: ((A + B) - C) + D
+            size_t start_idx = state.expr_stack.size() - op_count - 1;
+            auto result = state.expr_stack[start_idx];
+
+            // Find operators in order
+            size_t operand_idx = start_idx + 1;
+            bool looking_for_op = true;
+
+            for (size_t i = 0; i < text.size() && operand_idx < state.expr_stack.size(); i++) {
+                char c = text[i];
+                if (looking_for_op && (c == '+' || c == '-')) {
+                    auto binary = std::make_shared<Expr>();
+                    binary->loc = result->loc;
+
+                    ExprBinary bin;
+                    bin.op = (c == '+') ? ExprBinary::Op::Add : ExprBinary::Op::Sub;
+                    bin.lhs = result;
+                    bin.rhs = state.expr_stack[operand_idx++];
+                    binary->node = std::move(bin);
+
+                    result = binary;
+                    looking_for_op = false;
+                } else if (c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != '+' && c != '-') {
+                    looking_for_op = true;
+                }
+            }
+
+            // Remove operands from stack and push result
+            state.expr_stack.erase(state.expr_stack.begin() + start_idx, state.expr_stack.end());
+            state.expr_stack.push_back(result);
+        }
+        // Otherwise single operand, already on stack
+    }
+};
+
+template<>
+struct action<expression> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        std::string text = std::string(in.string());
+
+        // Since expression inherits from additive_expression, we ONLY handle additive operators (+, -) here.
+        // Power, multiplicative operators are already handled by their respective actions.
+        size_t op_count = 0;
+        bool prev_was_op = true;  // For distinguishing binary +/- from unary
+        for (size_t i = 0; i < text.size(); i++) {
+            char c = text[i];
+            bool is_add_sub = (c == '+' || c == '-');
+
+            if (is_add_sub && !prev_was_op) {
+                op_count++;
+                prev_was_op = true;
+            } else if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+                prev_was_op = false;
+            }
+        }
+
+        if (op_count > 0 && state.expr_stack.size() > op_count) {
+            // Build left-to-right
+            size_t start_idx = state.expr_stack.size() - op_count - 1;
+            auto result = state.expr_stack[start_idx];
+
+            size_t operand_idx = start_idx + 1;
+            bool looking_for_op = true;
+
+            for (size_t i = 0; i < text.size() && operand_idx < state.expr_stack.size(); i++) {
+                char c = text[i];
+                bool is_add_sub = (c == '+' || c == '-');
+
+                if (looking_for_op && is_add_sub) {
+                    auto binary = std::make_shared<Expr>();
+                    binary->loc = result->loc;
+
+                    ExprBinary bin;
+                    bin.op = (c == '+') ? ExprBinary::Op::Add : ExprBinary::Op::Sub;
+                    bin.lhs = result;
+                    bin.rhs = state.expr_stack[operand_idx++];
+                    binary->node = std::move(bin);
+
+                    result = binary;
+                    looking_for_op = false;
+                } else if (c != ' ' && c != '\t' && c != '\n' && c != '\r' && !is_add_sub) {
+                    looking_for_op = true;
+                }
+            }
+
+            state.expr_stack.erase(state.expr_stack.begin() + start_idx, state.expr_stack.end());
+            state.expr_stack.push_back(result);
+        }
+        // Otherwise single operand, already on stack
     }
 };
 

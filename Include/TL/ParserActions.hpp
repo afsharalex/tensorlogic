@@ -78,6 +78,11 @@ template<> struct action<grammar::tensor_ref>;
 
 // Expression actions
 template<> struct action<grammar::primary_expression>;
+template<> struct action<grammar::unary_expression>;
+template<> struct action<grammar::power_expression>;
+template<> struct action<grammar::multiplicative_expression>;
+template<> struct action<grammar::additive_expression>;
+template<> struct action<grammar::expression>;
 template<> struct action<grammar::guarded_clause>;
 
 // Tensor equation actions

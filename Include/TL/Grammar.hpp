@@ -98,23 +98,71 @@ struct tensor_ref : pegtl::seq<
 // EXPRESSIONS
 // ============================================================================
 
-// Primary expression: tensor reference or number literal
-struct primary_expression : pegtl::sor<tensor_ref, number_literal> {};
+// Forward declaration for recursive expressions
+struct expression;
 
-// RHS expression: one or more primary expressions
-// Implicit multiplication: A B C means A * B * C
-// Multiple expressions separated by at least one horizontal space (not newline!)
+// Primary expression: parenthesized expression, tensor reference, or number literal
+struct primary_expression : pegtl::sor<
+    pegtl::seq<pegtl::one<'('>, pad<expression>, pad<pegtl::one<')'>>>,
+    tensor_ref,
+    number_literal
+> {};
+
+// Unary expression: -X or just primary
+struct unary_expression : pegtl::sor<
+    pegtl::seq<pad<pegtl::one<'-'>>, unary_expression>,
+    primary_expression
+> {};
+
+// Power (right-associative): X^2, X^Y^Z = X^(Y^Z)
+struct power_expression : pegtl::seq<
+    unary_expression,
+    pegtl::opt<
+        pegtl::seq<
+            pad<pegtl::one<'^'>>,
+            power_expression  // Right-associative recursion
+        >
+    >
+> {};
+
+// Multiplicative: *, /, %
+struct multiplicative_expression : pegtl::seq<
+    power_expression,
+    pegtl::star<
+        pegtl::seq<
+            pad<pegtl::one<'*', '/', '%'>>,
+            pad<power_expression>
+        >
+    >
+> {};
+
+// Additive: +, -
+struct additive_expression : pegtl::seq<
+    multiplicative_expression,
+    pegtl::star<
+        pegtl::seq<
+            pad<pegtl::one<'+', '-'>>,
+            pad<multiplicative_expression>
+        >
+    >
+> {};
+
+// Full expression (currently same as additive, will add comparisons later)
+struct expression : additive_expression {};
+
+// RHS expression with implicit multiplication support
+// A B means A * B (space-separated without operator)
 struct rhs_expression : pegtl::seq<
     hws,
-    primary_expression,
+    expression,
     pegtl::star<pegtl::seq<
         pegtl::plus<pegtl::sor<pegtl::one<' '>, pegtl::one<'\t'>>>,  // At least one space/tab
-        primary_expression
+        expression
     >>,
     hws
 > {};
 
-// Guarded clause (currently just an alias for rhs_expression)
+// Guarded clause (currently just rhs_expression)
 // Future: will support guards like (expr : condition)
 struct guarded_clause : rhs_expression {};
 
