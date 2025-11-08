@@ -38,6 +38,11 @@ struct ParseState {
     // Guard stacks
     std::vector<GuardedClause> clause_stack;
 
+    // Datalog stacks
+    std::vector<Identifier> datalog_term_stack;  // Terms for atoms
+    std::vector<DatalogAtom> datalog_atom_stack;  // Atoms for rules/queries
+    std::vector<DatalogAtom> datalog_body_stack;  // Body literals for rules
+
     // Top-level
     std::vector<Statement> statements;
 
@@ -88,5 +93,15 @@ template<> struct action<grammar::guarded_clause>;
 // Tensor equation actions
 template<> struct action<grammar::projection_op>;
 template<> struct action<grammar::tensor_equation>;
+
+// Datalog actions
+template<> struct action<grammar::uppercase_identifier>;
+template<> struct action<grammar::lowercase_identifier>;
+template<> struct action<grammar::datalog_term>;
+template<> struct action<grammar::datalog_atom>;
+template<> struct action<grammar::datalog_body_literal>;
+template<> struct action<grammar::datalog_fact>;
+template<> struct action<grammar::datalog_rule>;
+template<> struct action<grammar::datalog_query>;
 
 } // namespace tl::actions

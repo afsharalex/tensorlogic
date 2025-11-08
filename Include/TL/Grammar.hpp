@@ -205,12 +205,79 @@ struct tensor_equation : pegtl::seq<
 > {};
 
 // ============================================================================
+// DATALOG CONSTRUCTS
+// ============================================================================
+
+// Uppercase identifier (for relations and constants)
+struct uppercase_identifier : pegtl::seq<
+    pegtl::upper,
+    pegtl::star<pegtl::sor<pegtl::alnum, pegtl::one<'_'>>>
+> {};
+
+// Lowercase identifier (for variables)
+struct lowercase_identifier : pegtl::seq<
+    pegtl::lower,
+    pegtl::star<pegtl::sor<pegtl::alnum, pegtl::one<'_'>>>
+> {};
+
+// Datalog term: variable (lowercase) or constant (uppercase/number)
+// Variables: x, y, myVar
+// Constants: Alice, Bob, 42, 3.14
+struct datalog_term : pegtl::sor<
+    lowercase_identifier,  // variables
+    uppercase_identifier,  // constants
+    number_literal        // numeric constants
+> {};
+
+// Term list: comma-separated terms
+struct datalog_term_list : pegtl::list<pad<datalog_term>, pegtl::one<','>> {};
+
+// Datalog atom: Relation(term1, term2, ...)
+// Examples: Parent(Alice, Bob), Ancestor(x, y)
+struct datalog_atom : pegtl::seq<
+    uppercase_identifier,  // Relation name must start with uppercase
+    pad<pegtl::one<'('>>,
+    pegtl::opt<datalog_term_list>,
+    pad<pegtl::one<')'>>
+> {};
+
+// Datalog fact: atom (with only constants)
+// Example: Parent(Alice, Bob)
+struct datalog_fact : datalog_atom {};
+
+// Body literal (for rules): currently just atoms
+// Future: will support negation and comparisons
+struct datalog_body_literal : datalog_atom {};
+
+// Body literal list: comma-separated literals
+struct datalog_body_list : pegtl::list<pad<datalog_body_literal>, pegtl::one<','>> {};
+
+// Datalog rule: Head <- Body1, Body2, ...
+// Example: Ancestor(x, z) <- Parent(x, y), Ancestor(y, z)
+struct datalog_rule : pegtl::seq<
+    datalog_atom,                    // head
+    pad<pegtl::string<'<', '-'>>,   // <-
+    datalog_body_list                // body
+> {};
+
+// Query: atom followed by ?
+// Example: Ancestor(Alice, x)?
+struct datalog_query : pegtl::seq<
+    datalog_atom,
+    pad<pegtl::one<'?'>>
+> {};
+
+// ============================================================================
 // TOP-LEVEL
 // ============================================================================
 
-// Statement (currently only tensor equations)
-// Future: will include datalog facts, rules, queries, file operations
-struct statement : pegtl::sor<tensor_equation> {};
+// Statement: tensor equation, datalog fact, rule, or query
+struct statement : pegtl::sor<
+    datalog_rule,      // Try rule first (has <-)
+    datalog_query,     // Try query second (has ?)
+    datalog_fact,      // Try fact third (no special suffix)
+    tensor_equation    // Finally try tensor equation
+> {};
 
 // Program: zero or more statements separated by whitespace
 struct program : pegtl::seq<

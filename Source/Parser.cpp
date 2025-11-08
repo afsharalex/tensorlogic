@@ -513,6 +513,176 @@ struct action<tensor_equation> {
     }
 };
 
+// ============================================================================
+// DATALOG ACTIONS
+// ============================================================================
+
+template<>
+struct action<uppercase_identifier> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        Identifier id;
+        id.name = std::string(in.string());
+        id.loc = locFrom(in.position());
+        // Push to datalog_term_stack for use in Datalog contexts
+        state.datalog_term_stack.push_back(std::move(id));
+    }
+};
+
+template<>
+struct action<lowercase_identifier> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        Identifier id;
+        id.name = std::string(in.string());
+        id.loc = locFrom(in.position());
+        // Push to datalog_term_stack for use in Datalog contexts
+        state.datalog_term_stack.push_back(std::move(id));
+    }
+};
+
+template<>
+struct action<datalog_term> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // Terms are already pushed to datalog_term_stack by uppercase/lowercase_identifier
+        // or number_literal actions. Nothing additional needed here.
+    }
+};
+
+template<>
+struct action<datalog_atom> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // The term stack has: relation_name, term1, term2, ..., termN
+        // So if stack size is N+1, we have N terms
+        size_t num_terms = state.datalog_term_stack.size() > 0 ? (state.datalog_term_stack.size() - 1) : 0;
+
+        DatalogAtom atom;
+        atom.loc = locFrom(in.position());
+
+        // Pop relation name (it's at the bottom of the relevant section)
+        // Terms are pushed after relation, so relation is at position [size - num_terms - 1]
+        if (state.datalog_term_stack.size() > num_terms) {
+            size_t relation_idx = state.datalog_term_stack.size() - num_terms - 1;
+            atom.relation = state.datalog_term_stack[relation_idx];
+            state.datalog_term_stack.erase(state.datalog_term_stack.begin() + relation_idx);
+        }
+
+        // Collect the last num_terms from the stack
+        if (state.datalog_term_stack.size() >= num_terms) {
+            size_t start_idx = state.datalog_term_stack.size() - num_terms;
+            for (size_t i = start_idx; i < state.datalog_term_stack.size(); ++i) {
+                const auto& id = state.datalog_term_stack[i];
+                // Check if it's uppercase (constant) or lowercase (variable)
+                if (!id.name.empty() && std::isupper(id.name[0])) {
+                    // Uppercase -> constant -> StringLiteral
+                    StringLiteral lit;
+                    lit.text = id.name;
+                    lit.loc = id.loc;
+                    atom.terms.push_back(lit);
+                } else {
+                    // Lowercase -> variable -> Identifier
+                    atom.terms.push_back(id);
+                }
+            }
+            // Remove processed terms
+            state.datalog_term_stack.erase(state.datalog_term_stack.begin() + start_idx,
+                                           state.datalog_term_stack.end());
+        }
+
+        // Push to atom stack for use in facts/rules/queries
+        state.datalog_atom_stack.push_back(std::move(atom));
+    }
+};
+
+template<>
+struct action<datalog_body_literal> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // Since PEGTL doesn't auto-call parent actions for inherited rules,
+        // we need to manually invoke the datalog_atom logic here
+        action<datalog_atom>::apply(in, state);
+    }
+};
+
+template<>
+struct action<datalog_fact> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        DatalogFact fact;
+        fact.loc = locFrom(in.position());
+
+        // Pop the atom and convert to DatalogFact format
+        if (!state.datalog_atom_stack.empty()) {
+            DatalogAtom& atom = state.datalog_atom_stack.back();
+            fact.relation = atom.relation;
+
+            // Convert terms to constants (for facts, all terms should be constants)
+            for (const auto& term_variant : atom.terms) {
+                // Terms can be Identifier, StringLiteral, or ExprPtr
+                // For facts, they should be constants (StringLiteral or NumberLiteral)
+                if (std::holds_alternative<StringLiteral>(term_variant)) {
+                    fact.constants.push_back(std::get<StringLiteral>(term_variant));
+                } else if (std::holds_alternative<Identifier>(term_variant)) {
+                    // Convert uppercase Identifier to StringLiteral
+                    const Identifier& id = std::get<Identifier>(term_variant);
+                    StringLiteral lit;
+                    lit.text = id.name;
+                    lit.loc = id.loc;
+                    fact.constants.push_back(lit);
+                }
+                // TODO: Handle numeric literals properly
+            }
+
+            state.datalog_atom_stack.pop_back();
+        }
+
+        state.statements.push_back(std::move(fact));
+    }
+};
+
+template<>
+struct action<datalog_rule> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        DatalogRule rule;
+        rule.loc = locFrom(in.position());
+
+        // Pop head atom (first one pushed)
+        if (!state.datalog_atom_stack.empty()) {
+            rule.head = state.datalog_atom_stack.front();
+            state.datalog_atom_stack.erase(state.datalog_atom_stack.begin());
+        }
+
+        // Pop body atoms (remaining atoms on stack)
+        // Convert DatalogAtom vector to variant vector
+        for (auto& atom : state.datalog_atom_stack) {
+            rule.body.push_back(std::move(atom));
+        }
+        state.datalog_atom_stack.clear();
+
+        state.statements.push_back(std::move(rule));
+    }
+};
+
+template<>
+struct action<datalog_query> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        Query query;
+        query.loc = locFrom(in.position());
+
+        // Pop the atom and set as target
+        if (!state.datalog_atom_stack.empty()) {
+            query.target = state.datalog_atom_stack.back();
+            state.datalog_atom_stack.pop_back();
+        }
+
+        state.statements.push_back(std::move(query));
+    }
+};
+
 } // namespace tl::actions
 
 // ============================================================================
