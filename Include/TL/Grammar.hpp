@@ -11,18 +11,35 @@ namespace tl::grammar {
 namespace pegtl = tao::pegtl;
 
 // ============================================================================
-// WHITESPACE
+// WHITESPACE AND COMMENTS
 // ============================================================================
 
-// Whitespace includes spaces, tabs, newlines, and carriage returns
-struct ws : pegtl::star<pegtl::sor<
+// Line comment: // ... until end of line
+struct line_comment : pegtl::seq<
+    pegtl::two<'/'>,
+    pegtl::until<pegtl::eolf>
+> {};
+
+// Block comment: /* ... */
+struct block_comment : pegtl::seq<
+    pegtl::string<'/', '*'>,
+    pegtl::until<pegtl::string<'*', '/'>>
+> {};
+
+// Whitespace element: space, tab, newline, or comment
+struct ws_element : pegtl::sor<
     pegtl::one<' '>,
     pegtl::one<'\t'>,
     pegtl::one<'\n'>,
-    pegtl::one<'\r'>
->> {};
+    pegtl::one<'\r'>,
+    line_comment,
+    block_comment
+> {};
 
-// Horizontal whitespace (space and tab only, not newlines)
+// Whitespace includes spaces, tabs, newlines, carriage returns, and comments
+struct ws : pegtl::star<ws_element> {};
+
+// Horizontal whitespace (space and tab only, not newlines or comments)
 // Used for implicit multiplication to avoid consuming statement separators
 struct hws : pegtl::star<pegtl::sor<
     pegtl::one<' '>,
