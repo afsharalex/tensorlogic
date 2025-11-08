@@ -118,9 +118,20 @@ struct tensor_ref : pegtl::seq<
 // Forward declaration for recursive expressions
 struct expression;
 
-// Primary expression: parenthesized expression, tensor reference, or number literal
+// Function call: function_name(arg1, arg2, ...)
+// Examples: relu(X), softmax(Y[i]), sigmoid(W[i,j] * X[j])
+struct function_call : pegtl::seq<
+    identifier,
+    pad<pegtl::one<'('>>,
+    pegtl::opt<pegtl::list<pad<expression>, pegtl::one<','>>>,
+    pad<pegtl::one<')'>>
+> {};
+
+// Primary expression: parenthesized expression, function call, tensor reference, or number literal
+// Order matters: try function_call before tensor_ref (both start with identifier)
 struct primary_expression : pegtl::sor<
     pegtl::seq<pegtl::one<'('>, pad<expression>, pad<pegtl::one<')'>>>,
+    function_call,
     tensor_ref,
     number_literal
 > {};

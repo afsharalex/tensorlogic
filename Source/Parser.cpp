@@ -196,16 +196,61 @@ struct action<tensor_ref> {
 // ============================================================================
 
 template<>
+struct action<function_call> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        ExprCall call;
+
+        // Extract function name from matched text (before the opening paren)
+        std::string matched = std::string(in.string());
+        size_t paren_pos = matched.find('(');
+        if (paren_pos != std::string::npos) {
+            std::string func_name = matched.substr(0, paren_pos);
+            // Trim whitespace
+            func_name.erase(0, func_name.find_first_not_of(" \t\n\r"));
+            func_name.erase(func_name.find_last_not_of(" \t\n\r") + 1);
+
+            call.func.name = func_name;
+            call.func.loc = locFrom(in.position());
+        }
+
+        // Clear all identifiers from the stack (function name + any from arguments)
+        state.identifier_stack.clear();
+
+        // Collect arguments from expression stack
+        call.args = std::move(state.expr_stack);
+        state.expr_stack.clear();
+
+        // Wrap in Expr and push back
+        auto expr = std::make_shared<Expr>();
+        expr->loc = locFrom(in.position());
+        expr->node = std::move(call);
+        state.expr_stack.push_back(expr);
+    }
+};
+
+template<>
 struct action<primary_expression> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
-        // Numbers and parenthesized expressions already push to expr_stack
-        // Only handle tensor_ref case: check if this matched a tensor_ref by seeing if tensorref was just added
+        // Function calls and numbers already push to expr_stack
+        // Parenthesized expressions also already push to expr_stack
+        // Only handle tensor_ref case: check if this matched a tensor_ref
 
-        // Simple heuristic: If matched text starts with a letter, it's a tensor_ref and needs conversion.
-        // If it starts with a digit or '(', it's already handled.
         std::string text = std::string(in.string());
-        if (!text.empty() && std::isalpha(text[0]) && !state.tensorref_stack.empty()) {
+
+        // If text contains '(', it's either a function call or parenthesized expr - already handled
+        if (text.find('(') != std::string::npos) {
+            return;
+        }
+
+        // If starts with digit, it's a number literal - already handled
+        if (!text.empty() && std::isdigit(text[0])) {
+            return;
+        }
+
+        // Otherwise it's a tensor_ref, need to wrap it
+        if (!state.tensorref_stack.empty()) {
             auto expr = std::make_shared<Expr>();
             expr->loc = locFrom(in.position());
             expr->node = ExprTensorRef{state.tensorref_stack.back()};

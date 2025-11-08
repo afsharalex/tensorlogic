@@ -82,6 +82,7 @@ template<> struct action<grammar::slice>;
 template<> struct action<grammar::tensor_ref>;
 
 // Expression actions
+template<> struct action<grammar::function_call>;
 template<> struct action<grammar::primary_expression>;
 template<> struct action<grammar::unary_expression>;
 template<> struct action<grammar::power_expression>;
