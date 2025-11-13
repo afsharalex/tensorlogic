@@ -6,18 +6,25 @@ namespace tl {
 std::string toString(const Identifier& id) { return id.name; }
 
 static std::string indexToString(const Index& idx) {
+    std::string result;
     if (std::holds_alternative<Identifier>(idx.value)) {
-        return std::get<Identifier>(idx.value).name;
+        result = std::get<Identifier>(idx.value).name;
     } else if (std::holds_alternative<NumberLiteral>(idx.value)) {
-        return std::get<NumberLiteral>(idx.value).text;
+        result = std::get<NumberLiteral>(idx.value).text;
     } else {
         // VirtualIndex
         const auto& vidx = std::get<VirtualIndex>(idx.value);
-        std::string result = "*" + vidx.name.name;
+        result = "*" + vidx.name.name;
         if (vidx.offset > 0) result += "+" + std::to_string(vidx.offset);
         else if (vidx.offset < 0) result += std::to_string(vidx.offset);
-        return result;
     }
+
+    // Add dot suffix if normalized
+    if (idx.normalized) {
+        result += ".";
+    }
+
+    return result;
 }
 
 static std::string sliceToString(const Slice& slice) {

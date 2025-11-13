@@ -76,6 +76,7 @@ template<> struct action<grammar::float_literal>;
 
 // Index and slice actions
 template<> struct action<grammar::simple_index>;
+template<> struct action<grammar::normalized_index>;
 template<> struct action<grammar::slice>;
 
 // Tensor reference actions

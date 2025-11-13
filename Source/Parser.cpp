@@ -92,6 +92,33 @@ struct action<simple_index> {
 };
 
 template<>
+struct action<normalized_index> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        Index idx;
+        idx.loc = locFrom(in.position());
+        idx.normalized = true;  // Mark as normalized
+
+        // Parse the matched text directly to extract the identifier (without the dot)
+        std::string matched = std::string(in.string());
+        if (!matched.empty() && matched.back() == '.') {
+            matched.pop_back();
+        }
+
+        Identifier id;
+        id.name = matched;
+        id.loc = idx.loc;
+        idx.value = id;
+
+        // Wrap in IndexOrSlice
+        IndexOrSlice ios;
+        ios.loc = idx.loc;
+        ios.value = std::move(idx);
+        state.index_or_slice_stack.push_back(std::move(ios));
+    }
+};
+
+template<>
 struct action<slice> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
@@ -177,7 +204,10 @@ struct action<tensor_ref> {
         TensorRef ref;
         ref.loc = locFrom(in.position());
 
-        // Pop identifier (tensor name) from the back (most recent)
+        // The tensor name is the most recent identifier on the stack that hasn't
+        // been consumed by index actions. Since simple_index and normalized_index
+        // now parse identifiers directly from matched text, the tensor name is the
+        // last identifier on the stack.
         if (!state.identifier_stack.empty()) {
             ref.name = std::move(state.identifier_stack.back());
             state.identifier_stack.pop_back();
@@ -371,8 +401,6 @@ struct action<additive_expression> {
     static void apply(const Input& in, ParseState& state) {
         // Parse the input to find operators
         std::string text = std::string(in.string());
-        std::cerr << "[DEBUG] additive_expression matched: '" << text << "'" << std::endl;
-        std::cerr << "[DEBUG] expr_stack.size() = " << state.expr_stack.size() << std::endl;
 
         // Count how many operators we have (careful not to count unary minus)
         size_t op_count = 0;

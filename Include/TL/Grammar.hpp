@@ -81,6 +81,16 @@ struct number_literal : pegtl::sor<float_literal, integer_literal> {};
 // Examples: i, j, 0, 1, 42
 struct simple_index : pegtl::sor<identifier, integer_literal> {};
 
+// Normalized index: identifier pattern followed by dot (for softmax normalization)
+// Examples: i., j., k.
+// Used in attention mechanisms: Attn[q, k.] = Scores[q, k]
+// We match the identifier pattern directly (not using the identifier rule) to avoid action side effects
+struct normalized_index : pegtl::seq<
+    pegtl::alpha,  // Start with a letter
+    pegtl::star<pegtl::sor<pegtl::alnum, pegtl::one<'_'>>>,  // Followed by alphanumeric or underscore
+    pegtl::one<'.'>  // Followed by dot
+> {};
+
 // Slice: [start]:[end][:step]
 // Examples: :, 0:10, 0:10:2, :10, 0:, ::2
 struct slice : pegtl::seq<
@@ -90,8 +100,8 @@ struct slice : pegtl::seq<
     pegtl::opt<pegtl::seq<pegtl::one<':'>, integer_literal>>
 > {};
 
-// Index or slice (order matters - try slice first to match the colon)
-struct index_or_slice : pegtl::sor<slice, simple_index> {};
+// Index or slice (order matters - try normalized_index first to capture the dot)
+struct index_or_slice : pegtl::sor<normalized_index, slice, simple_index> {};
 
 // Comma-separated list of indices/slices
 struct index_list : pegtl::list<pad<index_or_slice>, pegtl::one<','>> {};
