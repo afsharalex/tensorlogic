@@ -75,12 +75,23 @@ struct action<simple_index> {
         Index idx;
         idx.loc = locFrom(in.position());
 
-        if (!state.identifier_stack.empty()) {
-            idx.value = state.identifier_stack.back();
-            state.identifier_stack.pop_back();
-        } else if (!state.number_stack.empty()) {
-            idx.value = state.number_stack.back();
-            state.number_stack.pop_back();
+        // Parse the matched text directly to avoid stack confusion
+        // (integer_literal also pushes to expr_stack, causing duplicates)
+        std::string matched = std::string(in.string());
+
+        // Check if it's a number or identifier
+        if (!matched.empty() && std::isdigit(matched[0])) {
+            // It's a number literal
+            NumberLiteral num;
+            num.text = matched;
+            num.loc = idx.loc;
+            idx.value = num;
+        } else {
+            // It's an identifier
+            Identifier id;
+            id.name = matched;
+            id.loc = idx.loc;
+            idx.value = id;
         }
 
         // Wrap in IndexOrSlice for consistency
@@ -125,21 +136,35 @@ struct action<slice> {
         Slice s;
         s.loc = locFrom(in.position());
 
-        // Parse the matched string to understand structure
+        // Parse the matched string directly to extract numbers
         std::string slice_str = std::string(in.string());
 
         // Count colons to determine if we have start:end or start:end:step
         size_t colon_count = std::count(slice_str.begin(), slice_str.end(), ':');
 
-        // Collect numbers that were parsed for this slice
+        // Parse numbers from the slice string
         std::vector<NumberLiteral> nums;
-        while (!state.number_stack.empty() && nums.size() < 3) {
-            nums.push_back(state.number_stack.back());
-            state.number_stack.pop_back();
+        std::string current_num;
+        for (char c : slice_str) {
+            if (std::isdigit(c)) {
+                current_num += c;
+            } else if (c == ':') {
+                if (!current_num.empty()) {
+                    NumberLiteral num;
+                    num.text = current_num;
+                    num.loc = s.loc;
+                    nums.push_back(num);
+                    current_num.clear();
+                }
+            }
         }
-
-        // Reverse to get them in parse order
-        std::reverse(nums.begin(), nums.end());
+        // Don't forget the last number
+        if (!current_num.empty()) {
+            NumberLiteral num;
+            num.text = current_num;
+            num.loc = s.loc;
+            nums.push_back(num);
+        }
 
         // Assign based on the structure of the slice string
         if (colon_count == 1) {

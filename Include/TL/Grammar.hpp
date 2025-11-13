@@ -77,9 +77,20 @@ struct number_literal : pegtl::sor<float_literal, integer_literal> {};
 // INDICES AND SLICES
 // ============================================================================
 
-// Simple index: identifier or integer literal
+// Index identifier: identifier pattern for indices (no action to avoid stack pollution)
+// We match the identifier pattern directly instead of using identifier
+struct index_identifier : pegtl::seq<
+    pegtl::alpha,
+    pegtl::star<pegtl::sor<pegtl::alnum, pegtl::one<'_'>>>
+> {};
+
+// Index integer: integer pattern for indices (no action to avoid expr_stack pollution)
+// We match the integer pattern directly instead of using integer_literal
+struct index_integer : pegtl::plus<pegtl::digit> {};
+
+// Simple index: index identifier or index integer
 // Examples: i, j, 0, 1, 42
-struct simple_index : pegtl::sor<identifier, integer_literal> {};
+struct simple_index : pegtl::sor<index_identifier, index_integer> {};
 
 // Normalized index: identifier pattern followed by dot (for softmax normalization)
 // Examples: i., j., k.
@@ -93,11 +104,12 @@ struct normalized_index : pegtl::seq<
 
 // Slice: [start]:[end][:step]
 // Examples: :, 0:10, 0:10:2, :10, 0:, ::2
+// Use index_integer instead of integer_literal to avoid expr_stack pollution
 struct slice : pegtl::seq<
-    pegtl::opt<integer_literal>,
+    pegtl::opt<index_integer>,
     pegtl::one<':'>,
-    pegtl::opt<integer_literal>,
-    pegtl::opt<pegtl::seq<pegtl::one<':'>, integer_literal>>
+    pegtl::opt<index_integer>,
+    pegtl::opt<pegtl::seq<pegtl::one<':'>, index_integer>>
 > {};
 
 // Index or slice (order matters - try normalized_index first to capture the dot)
