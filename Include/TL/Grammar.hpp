@@ -102,6 +102,20 @@ struct normalized_index : pegtl::seq<
     pegtl::one<'.'>  // Followed by dot
 > {};
 
+// Virtual index: *t, *t+1, *t-1 (for recurrent operations)
+// Examples: *t, *t+1, *t-1
+// Used in RNNs: State[i, *t+1] = relu(W[i,j] State[j, *t] + Input[i, t])
+struct virtual_index_offset : pegtl::seq<
+    pegtl::one<'+', '-'>,
+    index_integer
+> {};
+
+struct virtual_index : pegtl::seq<
+    pegtl::one<'*'>,
+    index_identifier,
+    pegtl::opt<virtual_index_offset>
+> {};
+
 // Slice: [start]:[end][:step]
 // Examples: :, 0:10, 0:10:2, :10, 0:, ::2
 // Use index_integer instead of integer_literal to avoid expr_stack pollution
@@ -112,8 +126,8 @@ struct slice : pegtl::seq<
     pegtl::opt<pegtl::seq<pegtl::one<':'>, index_integer>>
 > {};
 
-// Index or slice (order matters - try normalized_index first to capture the dot)
-struct index_or_slice : pegtl::sor<normalized_index, slice, simple_index> {};
+// Index or slice (order matters - try virtual_index and normalized_index first)
+struct index_or_slice : pegtl::sor<virtual_index, normalized_index, slice, simple_index> {};
 
 // Comma-separated list of indices/slices
 struct index_list : pegtl::list<pad<index_or_slice>, pegtl::one<','>> {};

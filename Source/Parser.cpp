@@ -130,6 +130,69 @@ struct action<normalized_index> {
 };
 
 template<>
+struct action<virtual_index> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        Index idx;
+        idx.loc = locFrom(in.position());
+
+        // Parse the matched text directly to extract virtual index components
+        // Format: *t, *t+1, *t-1
+        std::string matched = std::string(in.string());
+
+        VirtualIndex virt;
+        virt.loc = idx.loc;
+
+        // Skip the * prefix
+        size_t pos = 1; // Start after '*'
+
+        // Extract the identifier name (e.g., 't' from '*t')
+        size_t id_start = pos;
+        while (pos < matched.size() && (std::isalnum(matched[pos]) || matched[pos] == '_')) {
+            pos++;
+        }
+
+        if (pos > id_start) {
+            virt.name.name = matched.substr(id_start, pos - id_start);
+            virt.name.loc = virt.loc;
+        }
+
+        // Check for optional offset (+1 or -1)
+        if (pos < matched.size()) {
+            // Parse +/- followed by number
+            char op = matched[pos];
+            if (op == '+' || op == '-') {
+                pos++; // Skip the operator
+                std::string num_str;
+                while (pos < matched.size() && std::isdigit(matched[pos])) {
+                    num_str += matched[pos];
+                    pos++;
+                }
+                if (!num_str.empty()) {
+                    int offset_val = std::stoi(num_str);
+                    virt.offset = (op == '-') ? -offset_val : offset_val;
+
+                    // Validate: only +1 and -1 are semantically valid (per grammar spec)
+                    if (virt.offset != 1 && virt.offset != -1) {
+                        // Warning: other offsets may not be semantically valid
+                        // For now, we parse them but implementations should validate
+                    }
+                }
+            }
+        }
+
+        // Wrap VirtualIndex in Index
+        idx.value = std::move(virt);
+
+        // Wrap in IndexOrSlice
+        IndexOrSlice ios;
+        ios.loc = idx.loc;
+        ios.value = std::move(idx);
+        state.index_or_slice_stack.push_back(std::move(ios));
+    }
+};
+
+template<>
 struct action<slice> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
