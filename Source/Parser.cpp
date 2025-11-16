@@ -825,8 +825,47 @@ template<>
 struct action<datalog_term> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
-        // Terms are already pushed to datalog_term_stack by uppercase/lowercase_identifier
-        // or number_literal actions. Nothing additional needed here.
+        // datalog_term matches: lowercase_identifier | uppercase_identifier | number_literal
+        // Identifiers are ALREADY pushed by their respective uppercase/lowercase_identifier actions
+        // We ONLY need to handle numbers here (which don't have their own Datalog-specific actions)
+
+        std::string text = std::string(in.string());
+
+        // Check if it's a number (starts with digit or minus sign followed by digit)
+        if (!text.empty() && std::isdigit(text[0])) {
+            // It's a positive number - push to datalog_term_stack
+            Identifier term_id;
+            term_id.name = text;
+            term_id.loc = locFrom(in.position());
+            state.datalog_term_stack.push_back(std::move(term_id));
+        } else if (text.size() > 1 && text[0] == '-' && std::isdigit(text[1])) {
+            // It's a negative number - push to datalog_term_stack
+            Identifier term_id;
+            term_id.name = text;
+            term_id.loc = locFrom(in.position());
+            state.datalog_term_stack.push_back(std::move(term_id));
+        }
+        // Identifiers are already on the stack from uppercase/lowercase_identifier actions
+        // We do NOT push them again here to avoid PEG backtracking duplication issues
+    }
+};
+
+template<>
+struct action<datalog_relation_name> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // When this rule matches, we need to:
+        // 1. Push the relation name to the term stack (uppercase_identifier action won't fire automatically)
+        // 2. Set a marker to track where this atom's data starts
+
+        // Push relation name to term stack
+        Identifier id;
+        id.name = std::string(in.string());
+        id.loc = locFrom(in.position());
+        state.datalog_term_stack.push_back(std::move(id));
+
+        // Set marker to point to the relation name we just pushed (at end of stack)
+        state.datalog_atom_term_start_marker = state.datalog_term_stack.size() - 1;
     }
 };
 
@@ -834,41 +873,48 @@ template<>
 struct action<datalog_atom> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
-        // The term stack has: relation_name, term1, term2, ..., termN
-        // So if stack size is N+1, we have N terms
-        size_t num_terms = state.datalog_term_stack.size() > 0 ? (state.datalog_term_stack.size() - 1) : 0;
+        // The marker was set by datalog_relation_name to point to where this atom's terms start
+        // Due to PEG backtracking, there may be residue on the stack from failed parse attempts
+        // We only consume terms from the marker position onward
 
         DatalogAtom atom;
         atom.loc = locFrom(in.position());
 
-        // Pop relation name (it's at the bottom of the relevant section)
-        // Terms are pushed after relation, so relation is at position [size - num_terms - 1]
-        if (state.datalog_term_stack.size() > num_terms) {
-            size_t relation_idx = state.datalog_term_stack.size() - num_terms - 1;
-            atom.relation = state.datalog_term_stack[relation_idx];
-            state.datalog_term_stack.erase(state.datalog_term_stack.begin() + relation_idx);
-        }
+        // Get the start position (where relation name was)
+        size_t start_pos = state.datalog_atom_term_start_marker;
 
-        // Collect the last num_terms from the stack
-        if (state.datalog_term_stack.size() >= num_terms) {
-            size_t start_idx = state.datalog_term_stack.size() - num_terms;
-            for (size_t i = start_idx; i < state.datalog_term_stack.size(); ++i) {
+        if (start_pos < state.datalog_term_stack.size()) {
+            // First element at marker position is the relation name
+            atom.relation = state.datalog_term_stack[start_pos];
+
+            // Remaining elements after the relation are terms
+            for (size_t i = start_pos + 1; i < state.datalog_term_stack.size(); ++i) {
                 const auto& id = state.datalog_term_stack[i];
-                // Check if it's uppercase (constant) or lowercase (variable)
+                // Check if it's uppercase (constant), lowercase (variable), or number
                 if (!id.name.empty() && std::isupper(id.name[0])) {
                     // Uppercase -> constant -> StringLiteral
                     StringLiteral lit;
                     lit.text = id.name;
                     lit.loc = id.loc;
                     atom.terms.push_back(lit);
+                } else if (!id.name.empty() && (std::isdigit(id.name[0]) ||
+                          (id.name.size() > 1 && id.name[0] == '-' && std::isdigit(id.name[1])))) {
+                    // Number -> convert to StringLiteral (numbers are constants in Datalog)
+                    StringLiteral lit;
+                    lit.text = id.name;
+                    lit.loc = id.loc;
+                    atom.terms.push_back(lit);
                 } else {
-                    // Lowercase -> variable -> Identifier
+                    // Lowercase or other -> variable -> Identifier
                     atom.terms.push_back(id);
                 }
             }
-            // Remove processed terms
-            state.datalog_term_stack.erase(state.datalog_term_stack.begin() + start_idx,
-                                           state.datalog_term_stack.end());
+
+            // Remove ONLY the terms belonging to this atom (from marker onward)
+            state.datalog_term_stack.erase(
+                state.datalog_term_stack.begin() + start_pos,
+                state.datalog_term_stack.end()
+            );
         }
 
         // Push to atom stack for use in facts/rules/queries
@@ -897,11 +943,81 @@ struct action<datalog_negation> {
 };
 
 template<>
+struct action<datalog_comparison> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // datalog_comparison matches: term op term
+        // Terms have been pushed to datalog_term_stack by datalog_term action
+        // We need to pop the last 2 terms and build a DatalogCondition
+
+        if (state.datalog_term_stack.size() >= 2 && !state.current_comparison_op.empty()) {
+            // Pop RHS term
+            Identifier rhs_term = state.datalog_term_stack.back();
+            state.datalog_term_stack.pop_back();
+
+            // Pop LHS term
+            Identifier lhs_term = state.datalog_term_stack.back();
+            state.datalog_term_stack.pop_back();
+
+            // Build DatalogCondition
+            DatalogCondition cond;
+            cond.loc = locFrom(in.position());
+            cond.op = state.current_comparison_op;
+
+            // Convert terms to ExprPtr (wrap Identifiers in ExprNumber or ExprTensorRef)
+            auto lhs_expr = std::make_shared<Expr>();
+            lhs_expr->loc = lhs_term.loc;
+
+            // Check if term is a number or identifier
+            if (!lhs_term.name.empty() && std::isdigit(lhs_term.name[0])) {
+                // It's a number
+                NumberLiteral num;
+                num.text = lhs_term.name;
+                num.loc = lhs_term.loc;
+                lhs_expr->node = ExprNumber{num};
+            } else {
+                // It's an identifier - wrap as TensorRef (scalar)
+                TensorRef ref;
+                ref.name = lhs_term;
+                ref.loc = lhs_term.loc;
+                lhs_expr->node = ExprTensorRef{ref};
+            }
+
+            auto rhs_expr = std::make_shared<Expr>();
+            rhs_expr->loc = rhs_term.loc;
+
+            if (!rhs_term.name.empty() && std::isdigit(rhs_term.name[0])) {
+                // It's a number
+                NumberLiteral num;
+                num.text = rhs_term.name;
+                num.loc = rhs_term.loc;
+                rhs_expr->node = ExprNumber{num};
+            } else {
+                // It's an identifier
+                TensorRef ref;
+                ref.name = rhs_term;
+                ref.loc = rhs_term.loc;
+                rhs_expr->node = ExprTensorRef{ref};
+            }
+
+            cond.lhs = lhs_expr;
+            cond.rhs = rhs_expr;
+
+            // Clear the comparison operator
+            state.current_comparison_op.clear();
+
+            // Push to body literal stack as comparison
+            state.datalog_body_stack.push_back(std::move(cond));
+        }
+    }
+};
+
+template<>
 struct action<datalog_body_literal> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
-        // datalog_body_literal is sor<datalog_negation, datalog_atom>
-        // If it matched datalog_negation, that action already handled it
+        // datalog_body_literal is sor<datalog_negation, datalog_comparison, datalog_atom>
+        // If it matched datalog_negation or datalog_comparison, those actions already handled it
         // If it matched datalog_atom, we need to move it to body_stack
 
         std::string text = std::string(in.string());
@@ -909,7 +1025,15 @@ struct action<datalog_body_literal> {
                            text.find('!') != std::string::npos ||
                            text.find("\u00AC") != std::string::npos);  // ¬ Unicode character
 
-        if (!is_negation) {
+        // Check if it's a comparison by looking for comparison operators
+        bool is_comparison = (text.find("!=") != std::string::npos ||
+                             text.find("==") != std::string::npos ||
+                             text.find("<=") != std::string::npos ||
+                             text.find(">=") != std::string::npos ||
+                             text.find('<') != std::string::npos ||
+                             text.find('>') != std::string::npos);
+
+        if (!is_negation && !is_comparison) {
             // It's a regular atom - move from atom_stack to body_stack
             if (!state.datalog_atom_stack.empty()) {
                 DatalogAtom atom = state.datalog_atom_stack.back();
@@ -917,6 +1041,7 @@ struct action<datalog_body_literal> {
                 state.datalog_body_stack.push_back(std::move(atom));
             }
         }
+        // Otherwise negation or comparison action has already pushed to body_stack
     }
 };
 

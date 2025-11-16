@@ -54,6 +54,9 @@ struct ParseState {
     std::string current_projection_op;
     std::string current_comparison_op;
     bool current_boolean_value{false};
+
+    // Datalog atom parsing markers (to handle PEG backtracking)
+    size_t datalog_atom_term_start_marker{0};  // Marks where current atom's terms start on term_stack
 };
 
 // ============================================================================
@@ -115,8 +118,10 @@ template<> struct action<grammar::tensor_equation>;
 template<> struct action<grammar::uppercase_identifier>;
 template<> struct action<grammar::lowercase_identifier>;
 template<> struct action<grammar::datalog_term>;
+template<> struct action<grammar::datalog_relation_name>;
 template<> struct action<grammar::datalog_atom>;
 template<> struct action<grammar::datalog_negation>;
+template<> struct action<grammar::datalog_comparison>;
 template<> struct action<grammar::datalog_body_literal>;
 template<> struct action<grammar::datalog_fact>;
 template<> struct action<grammar::datalog_rule>;

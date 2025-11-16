@@ -388,10 +388,14 @@ struct datalog_term : pegtl::sor<
 // Term list: comma-separated terms
 struct datalog_term_list : pegtl::list<pad<datalog_term>, pegtl::one<','>> {};
 
+// Relation name: uppercase identifier that starts an atom
+// This separate rule allows us to track when atom parsing begins (for PEG backtracking handling)
+struct datalog_relation_name : uppercase_identifier {};
+
 // Datalog atom: Relation(term1, term2, ...)
 // Examples: Parent(Alice, Bob), Ancestor(x, y)
 struct datalog_atom : pegtl::seq<
-    uppercase_identifier,  // Relation name must start with uppercase
+    datalog_relation_name,  // Relation name must start with uppercase
     pad<pegtl::one<'('>>,
     pegtl::opt<datalog_term_list>,
     pad<pegtl::one<')'>>
@@ -412,9 +416,18 @@ struct datalog_negation : pegtl::seq<
     pad<datalog_atom>
 > {};
 
-// Body literal (for rules): atoms or negated atoms
-// Examples: Friend(x, y), not Friend(x, y), ! Enemy(x, y)
-struct datalog_body_literal : pegtl::sor<datalog_negation, datalog_atom> {};
+// Comparison literal: term op term (for inequality constraints in rules)
+// Examples: x != y, x > 5, age >= 18
+// Used in rule bodies: Adult(p) <- Age(p, a), a >= 18
+struct datalog_comparison : pegtl::seq<
+    datalog_term,
+    pad<comparison_op>,
+    pad<datalog_term>
+> {};
+
+// Body literal (for rules): atoms, negated atoms, or comparisons
+// Examples: Friend(x, y), not Friend(x, y), x != y, age >= 18
+struct datalog_body_literal : pegtl::sor<datalog_negation, datalog_comparison, datalog_atom> {};
 
 // Body literal list: comma-separated literals
 struct datalog_body_list : pegtl::list<pad<datalog_body_literal>, pegtl::one<','>> {};
