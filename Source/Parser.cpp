@@ -963,6 +963,113 @@ struct action<datalog_query> {
     }
 };
 
+// ============================================================================
+// FILE OPERATION ACTIONS
+// ============================================================================
+
+template<>
+struct action<string_literal> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        std::string matched = std::string(in.string());
+
+        // Remove surrounding quotes
+        if (matched.size() >= 2 && matched.front() == '"' && matched.back() == '"') {
+            matched = matched.substr(1, matched.size() - 2);
+        }
+
+        // Process escape sequences
+        std::string unescaped;
+        for (size_t i = 0; i < matched.size(); ++i) {
+            if (matched[i] == '\\' && i + 1 < matched.size()) {
+                // Handle escape sequences
+                char next = matched[i + 1];
+                switch (next) {
+                    case 'n': unescaped += '\n'; break;
+                    case 't': unescaped += '\t'; break;
+                    case 'r': unescaped += '\r'; break;
+                    case '\\': unescaped += '\\'; break;
+                    case '"': unescaped += '"'; break;
+                    default:
+                        // Unknown escape, keep both characters
+                        unescaped += '\\';
+                        unescaped += next;
+                        break;
+                }
+                ++i;  // Skip the next character
+            } else {
+                unescaped += matched[i];
+            }
+        }
+
+        StringLiteral str;
+        str.text = unescaped;
+        str.loc = locFrom(in.position());
+        state.string_stack.push_back(std::move(str));
+    }
+};
+
+template<>
+struct action<file_literal> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // file_literal matches either file("path") or just "path"
+        // In both cases, string_literal action has already pushed the string to string_stack
+        // Nothing additional needed here - the string is already on the stack
+    }
+};
+
+template<>
+struct action<file_operation> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        FileOperation fileop;
+        fileop.loc = locFrom(in.position());
+
+        std::string text = std::string(in.string());
+
+        // Determine direction by checking if '=' comes after a string literal or tensor
+        // Format: tensor = "file" (read) or "file" = tensor (write)
+        size_t eq_pos = text.find('=');
+        bool starts_with_quote = (text.find_first_not_of(" \t\n\r") < text.size() &&
+                                   text[text.find_first_not_of(" \t\n\r")] == '"');
+
+        if (starts_with_quote) {
+            // "file" = tensor (write operation)
+            fileop.lhsIsTensor = false;
+
+            // Pop tensor ref from tensorref_stack
+            if (!state.tensorref_stack.empty()) {
+                fileop.tensor = state.tensorref_stack.back();
+                state.tensorref_stack.pop_back();
+            }
+
+            // Pop string literal from string_stack
+            if (!state.string_stack.empty()) {
+                fileop.file = state.string_stack.back();
+                state.string_stack.pop_back();
+            }
+        } else {
+            // tensor = "file" (read operation)
+            fileop.lhsIsTensor = true;
+
+            // Pop string literal from string_stack
+            if (!state.string_stack.empty()) {
+                fileop.file = state.string_stack.back();
+                state.string_stack.pop_back();
+            }
+
+            // Pop tensor ref from tensorref_stack
+            if (!state.tensorref_stack.empty()) {
+                fileop.tensor = state.tensorref_stack.back();
+                state.tensorref_stack.pop_back();
+            }
+        }
+
+        state.statements.push_back(std::move(fileop));
+    }
+};
+
 } // namespace tl::actions
 
 // ============================================================================

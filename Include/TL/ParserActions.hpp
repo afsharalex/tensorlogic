@@ -23,6 +23,7 @@ struct ParseState {
     // Literal stacks
     std::vector<Identifier> identifier_stack;
     std::vector<NumberLiteral> number_stack;
+    std::vector<StringLiteral> string_stack;
 
     // Index stacks
     std::vector<Index> index_stack;
@@ -74,6 +75,7 @@ inline SourceLocation locFrom(const pegtl::position& p) {
 template<> struct action<grammar::identifier>;
 template<> struct action<grammar::integer_literal>;
 template<> struct action<grammar::float_literal>;
+template<> struct action<grammar::string_literal>;
 
 // Index and slice actions
 template<> struct action<grammar::simple_index>;
@@ -113,5 +115,9 @@ template<> struct action<grammar::datalog_body_literal>;
 template<> struct action<grammar::datalog_fact>;
 template<> struct action<grammar::datalog_rule>;
 template<> struct action<grammar::datalog_query>;
+
+// File operation actions
+template<> struct action<grammar::file_literal>;
+template<> struct action<grammar::file_operation>;
 
 } // namespace tl::actions

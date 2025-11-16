@@ -73,6 +73,19 @@ struct float_literal : pegtl::seq<
 // Number literal: float or integer (order matters - try float first)
 struct number_literal : pegtl::sor<float_literal, integer_literal> {};
 
+// String literal: "..." with escaped characters
+// Matches content between double quotes, handling escape sequences
+struct string_content : pegtl::until<pegtl::at<pegtl::one<'"'>>, pegtl::sor<
+    pegtl::seq<pegtl::one<'\\'>, pegtl::any>,  // Escaped character
+    pegtl::any                                   // Any other character
+>> {};
+
+struct string_literal : pegtl::seq<
+    pegtl::one<'"'>,
+    string_content,
+    pegtl::one<'"'>
+> {};
+
 // ============================================================================
 // INDICES AND SLICES
 // ============================================================================
@@ -391,14 +404,39 @@ struct datalog_query : pegtl::seq<
 > {};
 
 // ============================================================================
+// FILE OPERATIONS
+// ============================================================================
+
+// File function call: file("path")
+struct file_function : pegtl::seq<
+    pegtl::string<'f', 'i', 'l', 'e'>,
+    pad<pegtl::one<'('>>,
+    pad<string_literal>,
+    pad<pegtl::one<')'>>
+> {};
+
+// File literal: either "path" or file("path")
+struct file_literal : pegtl::sor<file_function, string_literal> {};
+
+// File operation: tensor = file or file = tensor
+// Examples: X[i,j] = "data.csv", "output.txt" = Y[i]
+struct file_operation : pegtl::sor<
+    // tensor = file_literal (read)
+    pegtl::seq<tensor_ref, pad<pegtl::one<'='>>, pad<file_literal>>,
+    // file_literal = tensor (write)
+    pegtl::seq<file_literal, pad<pegtl::one<'='>>, pad<tensor_ref>>
+> {};
+
+// ============================================================================
 // TOP-LEVEL
 // ============================================================================
 
-// Statement: tensor equation, datalog fact, rule, or query
+// Statement: file operations, tensor equations, datalog constructs, or queries
 struct statement : pegtl::sor<
-    datalog_rule,      // Try rule first (has <-)
-    datalog_query,     // Try query second (has ?)
-    datalog_fact,      // Try fact third (no special suffix)
+    file_operation,    // Try file operations first (has string literal)
+    datalog_rule,      // Try rule second (has <-)
+    datalog_query,     // Try query third (has ?)
+    datalog_fact,      // Try fact fourth (no special suffix)
     tensor_equation    // Finally try tensor equation
 > {};
 
