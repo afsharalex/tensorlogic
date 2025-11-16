@@ -877,12 +877,46 @@ struct action<datalog_atom> {
 };
 
 template<>
+struct action<datalog_negation> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // Pop the atom that was just parsed by the nested datalog_atom rule
+        if (!state.datalog_atom_stack.empty()) {
+            DatalogAtom atom = state.datalog_atom_stack.back();
+            state.datalog_atom_stack.pop_back();
+
+            // Wrap in DatalogNegation
+            DatalogNegation neg;
+            neg.atom = std::move(atom);
+            neg.loc = locFrom(in.position());
+
+            // Push to body literal stack as negation
+            state.datalog_body_stack.push_back(std::move(neg));
+        }
+    }
+};
+
+template<>
 struct action<datalog_body_literal> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
-        // Since PEGTL doesn't auto-call parent actions for inherited rules,
-        // we need to manually invoke the datalog_atom logic here
-        action<datalog_atom>::apply(in, state);
+        // datalog_body_literal is sor<datalog_negation, datalog_atom>
+        // If it matched datalog_negation, that action already handled it
+        // If it matched datalog_atom, we need to move it to body_stack
+
+        std::string text = std::string(in.string());
+        bool is_negation = (text.find("not") != std::string::npos ||
+                           text.find('!') != std::string::npos ||
+                           text.find("\u00AC") != std::string::npos);  // ¬ Unicode character
+
+        if (!is_negation) {
+            // It's a regular atom - move from atom_stack to body_stack
+            if (!state.datalog_atom_stack.empty()) {
+                DatalogAtom atom = state.datalog_atom_stack.back();
+                state.datalog_atom_stack.pop_back();
+                state.datalog_body_stack.push_back(std::move(atom));
+            }
+        }
     }
 };
 
@@ -893,7 +927,10 @@ struct action<datalog_fact> {
         DatalogFact fact;
         fact.loc = locFrom(in.position());
 
-        // Pop the atom and convert to DatalogFact format
+        // IMPORTANT: Due to PEG backtracking, the atom_stack and term_stack may have
+        // multiple copies from failed parse attempts (datalog_rule, datalog_query).
+        // We use the LAST atom (most recent) and clear ALL stacks.
+
         if (!state.datalog_atom_stack.empty()) {
             DatalogAtom& atom = state.datalog_atom_stack.back();
             fact.relation = atom.relation;
@@ -915,7 +952,9 @@ struct action<datalog_fact> {
                 // TODO: Handle numeric literals properly
             }
 
-            state.datalog_atom_stack.pop_back();
+            // Clear ALL atoms and terms (includes backtracking artifacts)
+            state.datalog_atom_stack.clear();
+            state.datalog_term_stack.clear();
         }
 
         state.statements.push_back(std::move(fact));
@@ -935,12 +974,13 @@ struct action<datalog_rule> {
             state.datalog_atom_stack.erase(state.datalog_atom_stack.begin());
         }
 
-        // Pop body atoms (remaining atoms on stack)
-        // Convert DatalogAtom vector to variant vector
-        for (auto& atom : state.datalog_atom_stack) {
-            rule.body.push_back(std::move(atom));
-        }
+        // Pop body literals from body_stack (already in variant form)
+        rule.body = std::move(state.datalog_body_stack);
+        state.datalog_body_stack.clear();
+
+        // Clear all stacks (includes backtracking artifacts)
         state.datalog_atom_stack.clear();
+        state.datalog_term_stack.clear();
 
         state.statements.push_back(std::move(rule));
     }
@@ -1047,10 +1087,11 @@ struct action<datalog_query> {
         Query q;
         q.loc = locFrom(in.position());
 
-        // Pop datalog atom from datalog_atom_stack
+        // IMPORTANT: Due to PEG backtracking, use LAST atom and clear ALL stacks
         if (!state.datalog_atom_stack.empty()) {
             q.target = state.datalog_atom_stack.back();
-            state.datalog_atom_stack.pop_back();
+            state.datalog_atom_stack.clear();
+            state.datalog_term_stack.clear();
         }
 
         state.statements.push_back(std::move(q));

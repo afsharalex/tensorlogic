@@ -401,9 +401,20 @@ struct datalog_atom : pegtl::seq<
 // Example: Parent(Alice, Bob)
 struct datalog_fact : datalog_atom {};
 
-// Body literal (for rules): currently just atoms
-// Future: will support negation and comparisons
-struct datalog_body_literal : datalog_atom {};
+// Negated literal: not atom, ! atom, or ¬ atom
+// Examples: not Friend(x, y), ! Friend(x, y), ¬ Friend(x, y)
+struct datalog_negation : pegtl::seq<
+    pegtl::sor<
+        kw_not,                        // not
+        pegtl::one<'!'>,               // !
+        pegtl::utf8::one<0x00AC>       // ¬ (Unicode negation symbol U+00AC)
+    >,
+    pad<datalog_atom>
+> {};
+
+// Body literal (for rules): atoms or negated atoms
+// Examples: Friend(x, y), not Friend(x, y), ! Enemy(x, y)
+struct datalog_body_literal : pegtl::sor<datalog_negation, datalog_atom> {};
 
 // Body literal list: comma-separated literals
 struct datalog_body_list : pegtl::list<pad<datalog_body_literal>, pegtl::one<','>> {};

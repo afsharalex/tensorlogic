@@ -42,7 +42,7 @@ struct ParseState {
     // Datalog stacks
     std::vector<Identifier> datalog_term_stack;  // Terms for atoms
     std::vector<DatalogAtom> datalog_atom_stack;  // Atoms for rules/queries
-    std::vector<DatalogAtom> datalog_body_stack;  // Body literals for rules
+    std::vector<std::variant<DatalogAtom, DatalogNegation, DatalogCondition>> datalog_body_stack;  // Body literals for rules
 
     // Learning directive stacks
     std::vector<DirectiveArg> directive_arg_stack;
@@ -116,6 +116,7 @@ template<> struct action<grammar::uppercase_identifier>;
 template<> struct action<grammar::lowercase_identifier>;
 template<> struct action<grammar::datalog_term>;
 template<> struct action<grammar::datalog_atom>;
+template<> struct action<grammar::datalog_negation>;
 template<> struct action<grammar::datalog_body_literal>;
 template<> struct action<grammar::datalog_fact>;
 template<> struct action<grammar::datalog_rule>;
