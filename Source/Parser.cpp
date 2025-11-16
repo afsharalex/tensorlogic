@@ -540,60 +540,166 @@ struct action<additive_expression> {
 };
 
 template<>
-struct action<expression> {
+struct action<comparison_op> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // Store the comparison operator for use in comparison_expression
+        state.current_comparison_op = std::string(in.string());
+    }
+};
+
+template<>
+struct action<comparison_expression> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
         std::string text = std::string(in.string());
 
-        // Since expression inherits from additive_expression, we ONLY handle additive operators (+, -) here.
-        // Power, multiplicative operators are already handled by their respective actions.
-        size_t op_count = 0;
-        bool prev_was_op = true;  // For distinguishing binary +/- from unary
-        for (size_t i = 0; i < text.size(); i++) {
-            char c = text[i];
-            bool is_add_sub = (c == '+' || c == '-');
+        // Check if a comparison operator is present
+        if (!state.current_comparison_op.empty() && state.expr_stack.size() >= 2) {
+            // Pop RHS and LHS
+            auto rhs = state.expr_stack.back();
+            state.expr_stack.pop_back();
+            auto lhs = state.expr_stack.back();
+            state.expr_stack.pop_back();
 
-            if (is_add_sub && !prev_was_op) {
-                op_count++;
-                prev_was_op = true;
-            } else if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
-                prev_was_op = false;
-            }
+            // Build comparison expression
+            auto expr = std::make_shared<Expr>();
+            expr->loc = lhs->loc;
+
+            ExprBinary bin;
+            std::string op = state.current_comparison_op;
+            if (op == "<") bin.op = ExprBinary::Op::Lt;
+            else if (op == "<=") bin.op = ExprBinary::Op::Le;
+            else if (op == ">") bin.op = ExprBinary::Op::Gt;
+            else if (op == ">=") bin.op = ExprBinary::Op::Ge;
+            else if (op == "==") bin.op = ExprBinary::Op::Eq;
+            else if (op == "!=") bin.op = ExprBinary::Op::Ne;
+
+            bin.lhs = lhs;
+            bin.rhs = rhs;
+            expr->node = std::move(bin);
+
+            state.expr_stack.push_back(expr);
+            state.current_comparison_op.clear();
+        }
+        // Otherwise single expression, already on stack
+    }
+};
+
+template<>
+struct action<expression> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // expression now inherits from comparison_expression
+        // Comparisons are handled by comparison_expression action
+        // Nothing additional to do here
+    }
+};
+
+// ============================================================================
+// GUARD CONDITION ACTIONS
+// ============================================================================
+
+template<>
+struct action<guard_factor> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        std::string text = std::string(in.string());
+
+        // Check if this is a 'not' expression
+        if (text.find("not") != std::string::npos && !state.expr_stack.empty()) {
+            auto operand = state.expr_stack.back();
+            state.expr_stack.pop_back();
+
+            auto expr = std::make_shared<Expr>();
+            expr->loc = locFrom(in.position());
+
+            ExprUnary unary;
+            unary.op = ExprUnary::Op::Not;
+            unary.operand = operand;
+            expr->node = std::move(unary);
+
+            state.expr_stack.push_back(expr);
+        }
+        // Otherwise, comparison_expression or parenthesized guard already on stack
+    }
+};
+
+template<>
+struct action<guard_term> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        std::string text = std::string(in.string());
+
+        // Count how many 'and' operators we have
+        size_t and_count = 0;
+        size_t pos = 0;
+        while ((pos = text.find(" and ", pos)) != std::string::npos) {
+            and_count++;
+            pos += 5;  // Length of " and "
         }
 
-        if (op_count > 0 && state.expr_stack.size() > op_count) {
-            // Build left-to-right
-            size_t start_idx = state.expr_stack.size() - op_count - 1;
+        if (and_count > 0 && state.expr_stack.size() > and_count) {
+            // Build left-to-right: ((A and B) and C)
+            size_t start_idx = state.expr_stack.size() - and_count - 1;
             auto result = state.expr_stack[start_idx];
 
-            size_t operand_idx = start_idx + 1;
-            bool looking_for_op = true;
+            for (size_t i = 1; i <= and_count; ++i) {
+                auto binary = std::make_shared<Expr>();
+                binary->loc = result->loc;
 
-            for (size_t i = 0; i < text.size() && operand_idx < state.expr_stack.size(); i++) {
-                char c = text[i];
-                bool is_add_sub = (c == '+' || c == '-');
+                ExprBinary bin;
+                bin.op = ExprBinary::Op::And;
+                bin.lhs = result;
+                bin.rhs = state.expr_stack[start_idx + i];
+                binary->node = std::move(bin);
 
-                if (looking_for_op && is_add_sub) {
-                    auto binary = std::make_shared<Expr>();
-                    binary->loc = result->loc;
-
-                    ExprBinary bin;
-                    bin.op = (c == '+') ? ExprBinary::Op::Add : ExprBinary::Op::Sub;
-                    bin.lhs = result;
-                    bin.rhs = state.expr_stack[operand_idx++];
-                    binary->node = std::move(bin);
-
-                    result = binary;
-                    looking_for_op = false;
-                } else if (c != ' ' && c != '\t' && c != '\n' && c != '\r' && !is_add_sub) {
-                    looking_for_op = true;
-                }
+                result = binary;
             }
 
             state.expr_stack.erase(state.expr_stack.begin() + start_idx, state.expr_stack.end());
             state.expr_stack.push_back(result);
         }
-        // Otherwise single operand, already on stack
+        // Otherwise single factor, already on stack
+    }
+};
+
+template<>
+struct action<guard_condition> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        std::string text = std::string(in.string());
+
+        // Count how many 'or' operators we have
+        size_t or_count = 0;
+        size_t pos = 0;
+        while ((pos = text.find(" or ", pos)) != std::string::npos) {
+            or_count++;
+            pos += 4;  // Length of " or "
+        }
+
+        if (or_count > 0 && state.expr_stack.size() > or_count) {
+            // Build left-to-right: ((A or B) or C)
+            size_t start_idx = state.expr_stack.size() - or_count - 1;
+            auto result = state.expr_stack[start_idx];
+
+            for (size_t i = 1; i <= or_count; ++i) {
+                auto binary = std::make_shared<Expr>();
+                binary->loc = result->loc;
+
+                ExprBinary bin;
+                bin.op = ExprBinary::Op::Or;
+                bin.lhs = result;
+                bin.rhs = state.expr_stack[start_idx + i];
+                binary->node = std::move(bin);
+
+                result = binary;
+            }
+
+            state.expr_stack.erase(state.expr_stack.begin() + start_idx, state.expr_stack.end());
+            state.expr_stack.push_back(result);
+        }
+        // Otherwise single term, already on stack
     }
 };
 
@@ -601,36 +707,49 @@ template<>
 struct action<guarded_clause> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
-        // First, handle implicit multiplication
-        // Multiple expressions on the stack means implicit multiplication: A B C = A * B * C
-        if (state.expr_stack.size() > 1) {
-            // Expressions are pushed onto stack in parse order (A, then B, then C...)
-            // Build left-to-right: ((A * B) * C) * D
-            auto result = state.expr_stack[0];
-            for (size_t i = 1; i < state.expr_stack.size(); ++i) {
-                auto binary = std::make_shared<Expr>();
-                binary->loc = result->loc;
+        std::string text = std::string(in.string());
 
-                ExprBinary bin;
-                bin.op = ExprBinary::Op::Mul;
-                bin.lhs = result;
-                bin.rhs = state.expr_stack[i];
-                binary->node = std::move(bin);
+        // Check if there's a guard (contains ':')
+        bool has_guard = (text.find(':') != std::string::npos);
 
-                result = binary;
-            }
-
-            state.expr_stack.clear();
-            state.expr_stack.push_back(result);
-        }
-
-        // Now create the guarded clause with the (possibly combined) expression
         GuardedClause clause;
         clause.loc = locFrom(in.position());
 
-        if (!state.expr_stack.empty()) {
-            clause.expr = state.expr_stack.back();
+        if (has_guard && state.expr_stack.size() >= 2) {
+            // Pop guard condition first (it was parsed last)
+            auto guard = state.expr_stack.back();
             state.expr_stack.pop_back();
+
+            // Then pop the main expression
+            auto expr = state.expr_stack.back();
+            state.expr_stack.pop_back();
+
+            clause.expr = expr;
+            clause.guard = guard;
+        } else if (!state.expr_stack.empty()) {
+            // No guard, just the expression
+            // Handle implicit multiplication first
+            if (state.expr_stack.size() > 1) {
+                // Multiple expressions means implicit multiplication: A B C = A * B * C
+                auto result = state.expr_stack[0];
+                for (size_t i = 1; i < state.expr_stack.size(); ++i) {
+                    auto binary = std::make_shared<Expr>();
+                    binary->loc = result->loc;
+
+                    ExprBinary bin;
+                    bin.op = ExprBinary::Op::Mul;
+                    bin.lhs = result;
+                    bin.rhs = state.expr_stack[i];
+                    binary->node = std::move(bin);
+
+                    result = binary;
+                }
+                clause.expr = result;
+                state.expr_stack.clear();
+            } else {
+                clause.expr = state.expr_stack.back();
+                state.expr_stack.pop_back();
+            }
         }
 
         state.clause_stack.push_back(std::move(clause));

@@ -48,6 +48,7 @@ struct ParseState {
 
     // Temporary state
     std::string current_projection_op;
+    std::string current_comparison_op;
 };
 
 // ============================================================================
@@ -89,7 +90,14 @@ template<> struct action<grammar::unary_expression>;
 template<> struct action<grammar::power_expression>;
 template<> struct action<grammar::multiplicative_expression>;
 template<> struct action<grammar::additive_expression>;
+template<> struct action<grammar::comparison_op>;
+template<> struct action<grammar::comparison_expression>;
 template<> struct action<grammar::expression>;
+
+// Guard condition actions
+template<> struct action<grammar::guard_factor>;
+template<> struct action<grammar::guard_term>;
+template<> struct action<grammar::guard_condition>;
 template<> struct action<grammar::guarded_clause>;
 
 // Tensor equation actions

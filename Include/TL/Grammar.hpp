@@ -211,8 +211,29 @@ struct additive_expression : pegtl::seq<
     >
 > {};
 
-// Full expression (currently same as additive, will add comparisons later)
-struct expression : additive_expression {};
+// Comparison operators: <, >, <=, >=, ==, !=
+struct comparison_op : pegtl::sor<
+    pegtl::string<'<', '='>,  // <=
+    pegtl::string<'>', '='>,  // >=
+    pegtl::string<'=', '='>,  // ==
+    pegtl::string<'!', '='>,  // !=
+    pegtl::one<'<'>,          // <
+    pegtl::one<'>'>           // >
+> {};
+
+// Comparison expression: additive op additive
+struct comparison_expression : pegtl::seq<
+    additive_expression,
+    pegtl::opt<
+        pegtl::seq<
+            pad<comparison_op>,
+            pad<additive_expression>
+        >
+    >
+> {};
+
+// Full expression (includes comparisons)
+struct expression : comparison_expression {};
 
 // RHS expression with implicit multiplication support
 // A B means A * B (space-separated without operator)
@@ -226,9 +247,63 @@ struct rhs_expression : pegtl::seq<
     hws
 > {};
 
-// Guarded clause (currently just rhs_expression)
-// Future: will support guards like (expr : condition)
-struct guarded_clause : rhs_expression {};
+// ============================================================================
+// GUARD CONDITIONS (for guarded clauses)
+// ============================================================================
+
+// Keywords for logical operators
+struct kw_and : pegtl::string<'a', 'n', 'd'> {};
+struct kw_or : pegtl::string<'o', 'r'> {};
+struct kw_not : pegtl::string<'n', 'o', 't'> {};
+
+// Forward declaration
+struct guard_condition;
+
+// Guard factor: not factor | (condition) | comparison
+struct guard_factor : pegtl::sor<
+    pegtl::seq<pad<kw_not>, guard_factor>,  // not X (recursive)
+    pegtl::seq<pegtl::one<'('>, pad<guard_condition>, pad<pegtl::one<')'>>>,  // (condition)
+    comparison_expression  // X < 10, X == Y, etc.
+> {};
+
+// Guard term: factor and factor and...
+struct guard_term : pegtl::seq<
+    guard_factor,
+    pegtl::star<
+        pegtl::seq<
+            pad<kw_and>,
+            pad<guard_factor>
+        >
+    >
+> {};
+
+// Guard condition: term or term or...
+struct guard_condition : pegtl::seq<
+    guard_term,
+    pegtl::star<
+        pegtl::seq<
+            pad<kw_or>,
+            pad<guard_term>
+        >
+    >
+> {};
+
+// Guarded clause: expr : guard | expr
+// Example: 1.0 * X[i] : (i < 10) or just 0.1 * X[i]
+struct guarded_clause : pegtl::seq<
+    rhs_expression,
+    pegtl::opt<
+        pegtl::seq<
+            pad<pegtl::one<':'>>,
+            pad<guard_condition>
+        >
+    >
+> {};
+
+// Multiple guarded clauses separated by |
+// Example: expr1 : cond1 | expr2 : cond2 | expr3
+// Use pad around the | separator to consume whitespace
+struct clause_expression : pegtl::list<guarded_clause, pad<pegtl::one<'|'>>> {};
 
 // ============================================================================
 // TENSOR EQUATIONS
@@ -245,10 +320,11 @@ struct projection_op : pegtl::sor<
 
 // Tensor equation: LHS projection_op RHS
 // Example: Y[i,k] = A[i,j] B[j,k]
+// Or with guards: Weighted[i] = 1.0 * X[i] : (i < 10) | 0.5 * X[i]
 struct tensor_equation : pegtl::seq<
     tensor_ref,
     pad<projection_op>,
-    guarded_clause
+    clause_expression
 > {};
 
 // ============================================================================
