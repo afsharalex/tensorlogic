@@ -44,12 +44,16 @@ struct ParseState {
     std::vector<DatalogAtom> datalog_atom_stack;  // Atoms for rules/queries
     std::vector<DatalogAtom> datalog_body_stack;  // Body literals for rules
 
+    // Learning directive stacks
+    std::vector<DirectiveArg> directive_arg_stack;
+
     // Top-level
     std::vector<Statement> statements;
 
     // Temporary state
     std::string current_projection_op;
     std::string current_comparison_op;
+    bool current_boolean_value{false};
 };
 
 // ============================================================================
@@ -76,6 +80,7 @@ template<> struct action<grammar::identifier>;
 template<> struct action<grammar::integer_literal>;
 template<> struct action<grammar::float_literal>;
 template<> struct action<grammar::string_literal>;
+template<> struct action<grammar::list_literal>;
 
 // Index and slice actions
 template<> struct action<grammar::simple_index>;
@@ -114,10 +119,16 @@ template<> struct action<grammar::datalog_atom>;
 template<> struct action<grammar::datalog_body_literal>;
 template<> struct action<grammar::datalog_fact>;
 template<> struct action<grammar::datalog_rule>;
-template<> struct action<grammar::datalog_query>;
 
 // File operation actions
 template<> struct action<grammar::file_literal>;
 template<> struct action<grammar::file_operation>;
+
+// Query and learning directive actions
+template<> struct action<grammar::boolean_literal>;
+template<> struct action<grammar::directive_arg>;
+template<> struct action<grammar::query_directive>;
+template<> struct action<grammar::tensor_query>;
+template<> struct action<grammar::datalog_query>;
 
 } // namespace tl::actions

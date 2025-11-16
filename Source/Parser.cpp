@@ -946,20 +946,114 @@ struct action<datalog_rule> {
     }
 };
 
+// ============================================================================
+// LEARNING DIRECTIVE ACTIONS
+// ============================================================================
+
+template<>
+struct action<boolean_literal> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        std::string text = std::string(in.string());
+        state.current_boolean_value = (text == "true");
+    }
+};
+
+template<>
+struct action<directive_arg> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        DirectiveArg arg;
+        arg.loc = locFrom(in.position());
+
+        std::string text = std::string(in.string());
+
+        // Pop the argument name from identifier stack
+        if (!state.identifier_stack.empty()) {
+            arg.name = state.identifier_stack.back();
+            state.identifier_stack.pop_back();
+        }
+
+        // Determine the value type based on what's on the stacks
+        if (text.find("true") != std::string::npos || text.find("false") != std::string::npos) {
+            // Boolean value
+            arg.value = state.current_boolean_value;
+        } else if (!state.string_stack.empty()) {
+            // String value
+            arg.value = state.string_stack.back();
+            state.string_stack.pop_back();
+        } else if (!state.number_stack.empty()) {
+            // Number value
+            arg.value = state.number_stack.back();
+            state.number_stack.pop_back();
+        }
+
+        state.directive_arg_stack.push_back(std::move(arg));
+    }
+};
+
+template<>
+struct action<query_directive> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // QueryDirective is built here but stored temporarily
+        // It will be attached to the Query in tensor_query action
+        // For now, just leave the args on directive_arg_stack
+    }
+};
+
+template<>
+struct action<tensor_query> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        Query q;
+        q.loc = locFrom(in.position());
+
+        std::string text = std::string(in.string());
+        bool has_directive = (text.find('@') != std::string::npos);
+
+        // Pop tensor ref from tensorref_stack
+        if (!state.tensorref_stack.empty()) {
+            q.target = state.tensorref_stack.back();
+            state.tensorref_stack.pop_back();
+        }
+
+        // If there's a directive, build it
+        if (has_directive) {
+            QueryDirective dir;
+            dir.loc = q.loc;
+
+            // Pop directive name from identifier stack
+            if (!state.identifier_stack.empty()) {
+                dir.name = state.identifier_stack.back();
+                state.identifier_stack.pop_back();
+            }
+
+            // Pop all directive arguments
+            dir.args = std::move(state.directive_arg_stack);
+            state.directive_arg_stack.clear();
+
+            q.directive = std::move(dir);
+        }
+
+        state.statements.push_back(std::move(q));
+    }
+};
+
 template<>
 struct action<datalog_query> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
-        Query query;
-        query.loc = locFrom(in.position());
+        Query q;
+        q.loc = locFrom(in.position());
 
-        // Pop the atom and set as target
+        // Pop datalog atom from datalog_atom_stack
         if (!state.datalog_atom_stack.empty()) {
-            query.target = state.datalog_atom_stack.back();
+            q.target = state.datalog_atom_stack.back();
             state.datalog_atom_stack.pop_back();
         }
 
-        state.statements.push_back(std::move(query));
+        state.statements.push_back(std::move(q));
     }
 };
 
@@ -1006,6 +1100,25 @@ struct action<string_literal> {
         str.text = unescaped;
         str.loc = locFrom(in.position());
         state.string_stack.push_back(std::move(str));
+    }
+};
+
+template<>
+struct action<list_literal> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // Collect all expressions that belong to this list
+        // They're on the expr_stack from parsing list_elements
+
+        ExprList list;
+        list.elements = std::move(state.expr_stack);
+        state.expr_stack.clear();
+
+        // Wrap in Expr and push back
+        auto expr = std::make_shared<Expr>();
+        expr->loc = locFrom(in.position());
+        expr->node = std::move(list);
+        state.expr_stack.push_back(expr);
     }
 };
 

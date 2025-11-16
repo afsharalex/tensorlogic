@@ -87,6 +87,24 @@ struct string_literal : pegtl::seq<
 > {};
 
 // ============================================================================
+// LIST LITERALS
+// ============================================================================
+
+// Forward declaration for recursive array literals
+struct list_literal;
+
+// List elements: comma-separated numbers or nested lists
+struct list_elements : pegtl::list<pad<pegtl::sor<list_literal, number_literal>>, pegtl::one<','>> {};
+
+// List literal: [elem1, elem2, ...]
+// Supports: [1, 2, 3], [[1, 2], [3, 4]], etc.
+struct list_literal : pegtl::seq<
+    pegtl::one<'['>,
+    pad<pegtl::opt<list_elements>>,
+    pegtl::one<']'>
+> {};
+
+// ============================================================================
 // INDICES AND SLICES
 // ============================================================================
 
@@ -176,11 +194,13 @@ struct function_call : pegtl::seq<
     pad<pegtl::one<')'>>
 > {};
 
-// Primary expression: parenthesized expression, function call, tensor reference, or number literal
+// Primary expression: parenthesized expression, function call, tensor reference, list literal, or number literal
 // Order matters: try function_call before tensor_ref (both start with identifier)
+// Try list_literal before tensor_ref (both can have [ but list starts with [)
 struct primary_expression : pegtl::sor<
     pegtl::seq<pegtl::one<'('>, pad<expression>, pad<pegtl::one<')'>>>,
     function_call,
+    list_literal,
     tensor_ref,
     number_literal
 > {};
@@ -396,11 +416,56 @@ struct datalog_rule : pegtl::seq<
     datalog_body_list                // body
 > {};
 
-// Query: atom followed by ?
+// ============================================================================
+// LEARNING DIRECTIVES
+// ============================================================================
+
+// Boolean literals for directive arguments
+struct kw_true : pegtl::string<'t', 'r', 'u', 'e'> {};
+struct kw_false : pegtl::string<'f', 'a', 'l', 's', 'e'> {};
+struct boolean_literal : pegtl::sor<kw_true, kw_false> {};
+
+// Directive argument value: number, string, or boolean
+struct directive_value : pegtl::sor<boolean_literal, number_literal, string_literal> {};
+
+// Directive argument: name=value
+// Examples: lr=0.01, epochs=100, verbose=true
+struct directive_arg : pegtl::seq<
+    identifier,
+    pad<pegtl::one<'='>>,
+    pad<directive_value>
+> {};
+
+// Comma-separated list of directive arguments
+struct directive_args : pegtl::list<pad<directive_arg>, pegtl::one<','>> {};
+
+// Query directive: @directive_name(args)
+// Examples: @minimize(lr=0.01, epochs=100), @maximize(), @sample(n=1000)
+struct query_directive : pegtl::seq<
+    pegtl::one<'@'>,
+    identifier,  // directive name
+    pad<pegtl::one<'('>>,
+    pegtl::opt<directive_args>,
+    pad<pegtl::one<')'>>
+> {};
+
+// ============================================================================
+// QUERIES
+// ============================================================================
+
+// Datalog query: atom followed by ?
 // Example: Ancestor(Alice, x)?
 struct datalog_query : pegtl::seq<
     datalog_atom,
     pad<pegtl::one<'?'>>
+> {};
+
+// Tensor query: tensor_ref followed by ? and optional directive
+// Examples: Loss?, Y[i]?, Loss? @minimize(lr=0.01)
+struct tensor_query : pegtl::seq<
+    tensor_ref,
+    pad<pegtl::one<'?'>>,
+    pegtl::opt<pad<query_directive>>
 > {};
 
 // ============================================================================
@@ -435,8 +500,9 @@ struct file_operation : pegtl::sor<
 struct statement : pegtl::sor<
     file_operation,    // Try file operations first (has string literal)
     datalog_rule,      // Try rule second (has <-)
-    datalog_query,     // Try query third (has ?)
-    datalog_fact,      // Try fact fourth (no special suffix)
+    tensor_query,      // Try tensor query third (has ? with optional @)
+    datalog_query,     // Try datalog query fourth (has ?)
+    datalog_fact,      // Try fact fifth (no special suffix)
     tensor_equation    // Finally try tensor equation
 > {};
 
