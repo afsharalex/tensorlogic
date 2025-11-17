@@ -177,6 +177,41 @@ struct action<virtual_index> {
 };
 
 template<>
+struct action<strided_index> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        Index idx;
+        idx.loc = locFrom(in.position());
+
+        // Parse "j/2" to extract identifier "j" and stride "2"
+        std::string matched = std::string(in.string());
+        size_t slash_pos = matched.find('/');
+
+        if (slash_pos != std::string::npos) {
+            std::string id_part = matched.substr(0, slash_pos);
+            std::string stride_part = matched.substr(slash_pos + 1);
+
+            // Create identifier from the first part
+            Identifier id;
+            id.name = id_part;
+            id.loc = idx.loc;
+            idx.value = id;
+
+            // Parse the stride value
+            if (!stride_part.empty()) {
+                idx.stride = std::stoi(stride_part);
+            }
+        }
+
+        // Wrap in IndexOrSlice
+        IndexOrSlice ios;
+        ios.loc = idx.loc;
+        ios.value = std::move(idx);
+        state.index_or_slice_stack.push_back(std::move(ios));
+    }
+};
+
+template<>
 struct action<slice> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {

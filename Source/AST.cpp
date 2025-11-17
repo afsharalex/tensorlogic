@@ -19,6 +19,11 @@ static std::string indexToString(const Index& idx) {
         else if (vidx.offset < 0) result += std::to_string(vidx.offset);
     }
 
+    // Append stride if it's not the default value of 1
+    if (idx.stride > 1) {
+        result += "/" + std::to_string(idx.stride);
+    }
+
     // Note: normalized indices (i.) are syntactic sugar only - they affect execution
     // but are printed without the dot suffix in the AST string representation
     // The normalized flag is still set on the Index for executor use

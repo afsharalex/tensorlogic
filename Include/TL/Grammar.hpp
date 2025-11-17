@@ -153,6 +153,15 @@ struct virtual_index : pegtl::seq<
     pegtl::opt<virtual_index_offset>
 > {};
 
+// Strided index: identifier/integer (for pooling operations)
+// Examples: j/2, i/4, k/3
+// Used in pooling: Y[i, j/2] += X[i, j] (stride 2 pooling)
+struct strided_index : pegtl::seq<
+    index_identifier,
+    pegtl::one<'/'>,
+    index_integer
+> {};
+
 // Slice: [start]:[end][:step]
 // Examples: :, 0:10, 0:10:2, :10, 0:, ::2
 // Use index_integer instead of integer_literal to avoid expr_stack pollution
@@ -163,8 +172,8 @@ struct slice : pegtl::seq<
     pegtl::opt<pegtl::seq<pegtl::one<':'>, index_integer>>
 > {};
 
-// Index or slice (order matters - try virtual_index and normalized_index first)
-struct index_or_slice : pegtl::sor<virtual_index, normalized_index, slice, simple_index> {};
+// Index or slice (order matters - try more specific patterns first)
+struct index_or_slice : pegtl::sor<virtual_index, normalized_index, strided_index, slice, simple_index> {};
 
 // Comma-separated list of indices/slices
 struct index_list : pegtl::list<pad<index_or_slice>, pegtl::one<','>> {};

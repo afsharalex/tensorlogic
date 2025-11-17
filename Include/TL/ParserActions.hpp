@@ -94,6 +94,8 @@ template<> struct action<grammar::list_literal>;
 // Index and slice actions
 template<> struct action<grammar::simple_index>;
 template<> struct action<grammar::normalized_index>;
+template<> struct action<grammar::virtual_index>;
+template<> struct action<grammar::strided_index>;
 template<> struct action<grammar::slice>;
 
 // Tensor reference actions

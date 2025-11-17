@@ -40,6 +40,7 @@ struct Index {
   std::variant<Identifier, NumberLiteral, VirtualIndex> value;
   bool normalized{
       false}; // True if followed by '.' (e.g., "i." for softmax normalization)
+  int stride{1}; // Stride for pooling operations (e.g., "j/2" has stride 2)
   SourceLocation loc{};
 };
 
