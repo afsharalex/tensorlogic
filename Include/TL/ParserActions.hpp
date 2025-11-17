@@ -114,6 +114,7 @@ template<> struct action<grammar::expression>;
 template<> struct action<grammar::guard_factor>;
 template<> struct action<grammar::guard_term>;
 template<> struct action<grammar::guard_condition>;
+template<> struct action<grammar::guarded_clause_expr>;
 template<> struct action<grammar::guarded_clause>;
 
 // Tensor equation actions

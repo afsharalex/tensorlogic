@@ -698,6 +698,91 @@ struct action<guard_condition> {
 };
 
 template<>
+struct action<guarded_clause_expr> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // guarded_clause_expr matches: rhs_expression [comparison_op rhs_expression]?
+        // Each rhs_expression can push MULTIPLE expressions (implicit multiplication)
+        // Check if there's a comparison operator
+
+        if (!state.current_comparison_op.empty()) {
+            // There's a comparison: combine LHS with implicit multiplication, then build comparison
+            if (!state.expr_stack.empty()) {
+                // Pop RHS (last expression on stack)
+                auto rhs_expr = state.expr_stack.back();
+                state.expr_stack.pop_back();
+
+                // Combine remaining expressions as LHS with implicit multiplication
+                ExprPtr lhs_expr;
+                if (state.expr_stack.size() > 1) {
+                    // Multiple expressions: combine with implicit multiplication
+                    auto result = state.expr_stack[0];
+                    for (size_t i = 1; i < state.expr_stack.size(); ++i) {
+                        auto binary = std::make_shared<Expr>();
+                        binary->loc = result->loc;
+                        ExprBinary bin;
+                        bin.op = ExprBinary::Op::Mul;
+                        bin.implicit = true;
+                        bin.lhs = result;
+                        bin.rhs = state.expr_stack[i];
+                        binary->node = std::move(bin);
+                        result = binary;
+                    }
+                    lhs_expr = result;
+                } else if (!state.expr_stack.empty()) {
+                    // Single expression
+                    lhs_expr = state.expr_stack[0];
+                }
+                state.expr_stack.clear();
+
+                // Build comparison expression
+                auto cmp_expr = std::make_shared<Expr>();
+                cmp_expr->loc = locFrom(in.position());
+
+                ExprBinary bin;
+                std::string op = state.current_comparison_op;
+                if (op == "<") bin.op = ExprBinary::Op::Lt;
+                else if (op == "<=") bin.op = ExprBinary::Op::Le;
+                else if (op == ">") bin.op = ExprBinary::Op::Gt;
+                else if (op == ">=") bin.op = ExprBinary::Op::Ge;
+                else if (op == "==") bin.op = ExprBinary::Op::Eq;
+                else if (op == "!=") bin.op = ExprBinary::Op::Ne;
+
+                bin.lhs = lhs_expr;
+                bin.rhs = rhs_expr;
+                cmp_expr->node = std::move(bin);
+
+                state.expr_stack.push_back(cmp_expr);
+                state.current_comparison_op.clear();
+            }
+        } else {
+            // No comparison: just handle implicit multiplication if needed
+            if (state.expr_stack.size() > 1) {
+                // Multiple expressions means implicit multiplication: A B C = A * B * C
+                auto result = state.expr_stack[0];
+                for (size_t i = 1; i < state.expr_stack.size(); ++i) {
+                    auto binary = std::make_shared<Expr>();
+                    binary->loc = result->loc;
+
+                    ExprBinary bin;
+                    bin.op = ExprBinary::Op::Mul;
+                    bin.implicit = true;  // Mark as implicit multiplication
+                    bin.lhs = result;
+                    bin.rhs = state.expr_stack[i];
+                    binary->node = std::move(bin);
+
+                    result = binary;
+                }
+                // Replace all expressions with the combined result
+                state.expr_stack.clear();
+                state.expr_stack.push_back(result);
+            }
+            // Otherwise single expression, already on stack
+        }
+    }
+};
+
+template<>
 struct action<guarded_clause> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
