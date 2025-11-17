@@ -183,25 +183,16 @@ struct action<strided_index> {
         Index idx;
         idx.loc = locFrom(in.position());
 
-        // Parse "j/2" to extract identifier "j" and stride "2"
+        // Parse "j/2" and encode as composite identifier "j/2" (matching old parser behavior)
+        // The old lexer-based parser stores strided indices as Identifier{name="j/2"}
+        // NOT as a separate stride field
         std::string matched = std::string(in.string());
-        size_t slash_pos = matched.find('/');
 
-        if (slash_pos != std::string::npos) {
-            std::string id_part = matched.substr(0, slash_pos);
-            std::string stride_part = matched.substr(slash_pos + 1);
-
-            // Create identifier from the first part
-            Identifier id;
-            id.name = id_part;
-            id.loc = idx.loc;
-            idx.value = id;
-
-            // Parse the stride value
-            if (!stride_part.empty()) {
-                idx.stride = std::stoi(stride_part);
-            }
-        }
+        // Create composite identifier with the full "j/2" text
+        Identifier id;
+        id.name = matched;  // Keep the full "j/2" as the identifier name
+        id.loc = idx.loc;
+        idx.value = id;
 
         // Wrap in IndexOrSlice
         IndexOrSlice ios;
