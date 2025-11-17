@@ -113,6 +113,7 @@ struct ExprBinary {
   Op op{Op::Add};
   ExprPtr lhs;
   ExprPtr rhs;
+  bool implicit{false}; // True for implicit multiplication (A[i]B[j] instead of A[i]*B[j])
 };
 
 struct ExprUnary {

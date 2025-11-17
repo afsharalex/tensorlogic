@@ -429,9 +429,25 @@ struct datalog_comparison : pegtl::seq<
     pad<datalog_term>
 > {};
 
-// Body literal (for rules): atoms, negated atoms, or comparisons
-// Examples: Friend(x, y), not Friend(x, y), x != y, age >= 18
-struct datalog_body_literal : pegtl::sor<datalog_negation, datalog_comparison, datalog_atom> {};
+// Neurosymbolic condition: expr op expr (for tensor expression comparisons in rules)
+// Examples: Emb[x,d]Emb[y,d] > threshold, Score[i] >= 0.5
+// Used in neurosymbolic rules: Similar(x,y) <- Emb[x,d]Emb[y,d] > threshold
+// NOTE: Must be tried before datalog_atom to avoid ambiguity
+struct neurosymbolic_condition : pegtl::seq<
+    rhs_expression,
+    pad<comparison_op>,
+    pad<rhs_expression>
+> {};
+
+// Body literal (for rules): negated atoms, neurosymbolic conditions, comparisons, or atoms
+// Order matters: try neurosymbolic_condition before datalog_atom to handle tensor expressions
+// Examples: Friend(x, y), not Friend(x, y), x != y, Emb[x,d]Emb[y,d] > threshold
+struct datalog_body_literal : pegtl::sor<
+    datalog_negation,
+    neurosymbolic_condition,
+    datalog_comparison,
+    datalog_atom
+> {};
 
 // Body literal list: comma-separated literals
 struct datalog_body_list : pegtl::list<pad<datalog_body_literal>, pegtl::one<','>> {};

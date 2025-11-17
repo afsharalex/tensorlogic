@@ -126,6 +126,7 @@ template<> struct action<grammar::datalog_relation_name>;
 template<> struct action<grammar::datalog_atom>;
 template<> struct action<grammar::datalog_negation>;
 template<> struct action<grammar::datalog_comparison>;
+template<> struct action<grammar::neurosymbolic_condition>;
 template<> struct action<grammar::datalog_body_literal>;
 template<> struct action<grammar::datalog_fact>;
 template<> struct action<grammar::datalog_rule>;

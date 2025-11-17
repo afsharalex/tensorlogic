@@ -748,6 +748,7 @@ struct action<guarded_clause> {
 
                     ExprBinary bin;
                     bin.op = ExprBinary::Op::Mul;
+                    bin.implicit = true;  // Mark as implicit multiplication
                     bin.lhs = result;
                     bin.rhs = state.expr_stack[i];
                     binary->node = std::move(bin);
@@ -1351,14 +1352,21 @@ struct action<file_operation> {
 
         std::string text = std::string(in.string());
 
-        // Determine direction by checking if '=' comes after a string literal or tensor
+        // Determine direction by checking what comes before '='
         // Format: tensor = "file" (read) or "file" = tensor (write)
+        //         tensor = file("...") (read) or file("...") = tensor (write)
         size_t eq_pos = text.find('=');
-        bool starts_with_quote = (text.find_first_not_of(" \t\n\r") < text.size() &&
-                                   text[text.find_first_not_of(" \t\n\r")] == '"');
 
-        if (starts_with_quote) {
-            // "file" = tensor (write operation)
+        // Check if the LHS (before '=') contains a file reference
+        // Look for either: starts with quote OR contains "file("
+        std::string lhs = (eq_pos != std::string::npos) ? text.substr(0, eq_pos) : text;
+        size_t first_non_ws = lhs.find_first_not_of(" \t\n\r");
+        bool lhs_is_file = (first_non_ws < lhs.size() &&
+                           (lhs[first_non_ws] == '"' ||
+                            lhs.find("file(") != std::string::npos));
+
+        if (lhs_is_file) {
+            // "file" = tensor or file("...") = tensor (write operation)
             fileop.lhsIsTensor = false;
 
             // Pop tensor ref from tensorref_stack
@@ -1373,7 +1381,7 @@ struct action<file_operation> {
                 state.string_stack.pop_back();
             }
         } else {
-            // tensor = "file" (read operation)
+            // tensor = "file" or tensor = file("...") (read operation)
             fileop.lhsIsTensor = true;
 
             // Pop string literal from string_stack
