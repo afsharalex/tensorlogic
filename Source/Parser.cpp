@@ -31,26 +31,10 @@ struct action<identifier> {
 };
 
 template<>
-struct action<integer_literal> {
+struct action<number_literal> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
-        NumberLiteral num;
-        num.text = std::string(in.string());
-        num.loc = locFrom(in.position());
-        state.number_stack.push_back(num);
-
-        // Also push as expression for use in arithmetic
-        auto expr = std::make_shared<Expr>();
-        expr->loc = num.loc;
-        expr->node = ExprNumber{num};
-        state.expr_stack.push_back(expr);
-    }
-};
-
-template<>
-struct action<float_literal> {
-    template<typename Input>
-    static void apply(const Input& in, ParseState& state) {
+        // Capture the full matched text including optional sign
         NumberLiteral num;
         num.text = std::string(in.string());
         num.loc = locFrom(in.position());
@@ -1058,10 +1042,58 @@ struct action<datalog_comparison> {
 };
 
 template<>
+struct action<neurosymbolic_condition> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // neurosymbolic_condition matches: rhs_expression op rhs_expression
+        // Each rhs_expression can push MULTIPLE expressions (implicit multiplication)
+        // Strategy: RHS is always the LAST expression; LHS is everything before it
+
+        if (!state.current_comparison_op.empty() && !state.expr_stack.empty()) {
+            // Pop RHS (last expression on stack)
+            auto rhs_expr = state.expr_stack.back();
+            state.expr_stack.pop_back();
+
+            // Combine remaining expressions as LHS with implicit multiplication
+            ExprPtr lhs_expr;
+            if (state.expr_stack.size() > 1) {
+                // Multiple expressions: combine with implicit multiplication
+                auto result = state.expr_stack[0];
+                for (size_t i = 1; i < state.expr_stack.size(); ++i) {
+                    auto binary = std::make_shared<Expr>();
+                    binary->loc = result->loc;
+                    ExprBinary bin;
+                    bin.op = ExprBinary::Op::Mul;
+                    bin.implicit = true;
+                    bin.lhs = result;
+                    bin.rhs = state.expr_stack[i];
+                    binary->node = std::move(bin);
+                    result = binary;
+                }
+                lhs_expr = result;
+            } else if (!state.expr_stack.empty()) {
+                // Single expression
+                lhs_expr = state.expr_stack[0];
+            }
+            state.expr_stack.clear();
+
+            // Build DatalogCondition
+            DatalogCondition cond;
+            cond.loc = locFrom(in.position());
+            cond.op = state.current_comparison_op;
+            cond.lhs = lhs_expr;
+            cond.rhs = rhs_expr;
+            state.current_comparison_op.clear();
+            state.datalog_body_stack.push_back(std::move(cond));
+        }
+    }
+};
+
+template<>
 struct action<datalog_body_literal> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
-        // datalog_body_literal is sor<datalog_negation, datalog_comparison, datalog_atom>
+        // datalog_body_literal is sor<datalog_negation, neurosymbolic_condition, datalog_comparison, datalog_atom>
         // If it matched datalog_negation or datalog_comparison, those actions already handled it
         // If it matched datalog_atom, we need to move it to body_stack
 
@@ -1315,15 +1347,42 @@ struct action<string_literal> {
 };
 
 template<>
+struct action<list_start> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // When [ is matched, push a marker for where this list's elements will begin
+        // Using a stack allows nested lists to work correctly - each list tracks its own marker
+        state.list_marker_stack.push_back(state.expr_stack.size());
+    }
+};
+
+template<>
 struct action<list_literal> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
-        // Collect all expressions that belong to this list
-        // They're on the expr_stack from parsing list_elements
+        // Collect ONLY the expressions that belong to THIS list
+        // Pop the marker that was pushed when [ was matched
 
         ExprList list;
-        list.elements = std::move(state.expr_stack);
-        state.expr_stack.clear();
+
+        if (!state.list_marker_stack.empty()) {
+            size_t marker = state.list_marker_stack.back();
+            state.list_marker_stack.pop_back();
+
+            // Get elements from marker position to end
+            if (marker < state.expr_stack.size()) {
+                list.elements.assign(
+                    state.expr_stack.begin() + marker,
+                    state.expr_stack.end()
+                );
+                // Remove only the elements we consumed
+                state.expr_stack.erase(
+                    state.expr_stack.begin() + marker,
+                    state.expr_stack.end()
+                );
+            }
+            // If marker == size, it's an empty list (allowed)
+        }
 
         // Wrap in Expr and push back
         auto expr = std::make_shared<Expr>();

@@ -60,6 +60,9 @@ struct ParseState {
 
     // Tensor equation parsing markers (to handle PEG backtracking)
     size_t tensor_equation_lhs_marker{0};  // Marks where tensor equation LHS is on tensorref_stack
+
+    // List literal parsing markers (to handle nested lists)
+    std::vector<size_t> list_marker_stack;  // Stack of markers for nested list literals
 };
 
 // ============================================================================
@@ -83,9 +86,9 @@ inline SourceLocation locFrom(const pegtl::position& p) {
 
 // Lexical actions
 template<> struct action<grammar::identifier>;
-template<> struct action<grammar::integer_literal>;
-template<> struct action<grammar::float_literal>;
+template<> struct action<grammar::number_literal>;
 template<> struct action<grammar::string_literal>;
+template<> struct action<grammar::list_start>;
 template<> struct action<grammar::list_literal>;
 
 // Index and slice actions

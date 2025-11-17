@@ -70,8 +70,11 @@ struct float_literal : pegtl::seq<
     pegtl::star<pegtl::digit>
 > {};
 
-// Number literal: float or integer (order matters - try float first)
-struct number_literal : pegtl::sor<float_literal, integer_literal> {};
+// Number literal: optional sign followed by float or integer (order matters - try float first)
+struct number_literal : pegtl::seq<
+    pegtl::opt<pegtl::one<'+', '-'>>,
+    pegtl::sor<float_literal, integer_literal>
+> {};
 
 // String literal: "..." with escaped characters
 // Matches content between double quotes, handling escape sequences
@@ -93,13 +96,16 @@ struct string_literal : pegtl::seq<
 // Forward declaration for recursive array literals
 struct list_literal;
 
+// List start marker: opening bracket (used to set marker before parsing elements)
+struct list_start : pegtl::one<'['> {};
+
 // List elements: comma-separated numbers or nested lists
 struct list_elements : pegtl::list<pad<pegtl::sor<list_literal, number_literal>>, pegtl::one<','>> {};
 
 // List literal: [elem1, elem2, ...]
 // Supports: [1, 2, 3], [[1, 2], [3, 4]], etc.
 struct list_literal : pegtl::seq<
-    pegtl::one<'['>,
+    list_start,
     pad<pegtl::opt<list_elements>>,
     pegtl::one<']'>
 > {};
@@ -270,12 +276,15 @@ struct expression : comparison_expression {};
 
 // RHS expression with implicit multiplication support
 // A B means A * B (space-separated without operator)
+// Terms in implicit multiplication are additive_expression (no comparisons)
+// This allows comparisons to work at the top level without being consumed by implicit multiplication
+// Used in tensor equations and Datalog neurosymbolic conditions
 struct rhs_expression : pegtl::seq<
     hws,
-    expression,
+    additive_expression,  // No comparisons in terms
     pegtl::star<pegtl::seq<
         pegtl::plus<pegtl::sor<pegtl::one<' '>, pegtl::one<'\t'>>>,  // At least one space/tab
-        expression
+        additive_expression  // No comparisons in terms
     >>,
     hws
 > {};
@@ -321,10 +330,23 @@ struct guard_condition : pegtl::seq<
     >
 > {};
 
-// Guarded clause: expr : guard | expr
-// Example: 1.0 * X[i] : (i < 10) or just 0.1 * X[i]
-struct guarded_clause : pegtl::seq<
+// Guarded clause expression: rhs_expression with optional comparison
+// Allows: X[i], A B, X[i] < Y[i], etc.
+// The comparison is applied AFTER implicit multiplication resolves
+struct guarded_clause_expr : pegtl::seq<
     rhs_expression,
+    pegtl::opt<
+        pegtl::seq<
+            pad<comparison_op>,
+            pad<rhs_expression>
+        >
+    >
+> {};
+
+// Guarded clause: expr : guard | expr
+// Example: 1.0 * X[i] : (i < 10) or just 0.1 * X[i] or X[i] < threshold
+struct guarded_clause : pegtl::seq<
+    guarded_clause_expr,
     pegtl::opt<
         pegtl::seq<
             pad<pegtl::one<':'>>,
