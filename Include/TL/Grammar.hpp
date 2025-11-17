@@ -412,8 +412,6 @@ struct lowercase_identifier : pegtl::seq<
 > {};
 
 // Datalog term: variable (lowercase) or constant (uppercase/number)
-// Variables: x, y, myVar
-// Constants: Alice, Bob, 42, 3.14
 struct datalog_term : pegtl::sor<
     lowercase_identifier,  // variables
     uppercase_identifier,  // constants

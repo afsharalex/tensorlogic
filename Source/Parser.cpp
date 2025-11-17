@@ -966,27 +966,28 @@ struct action<datalog_term> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
         // datalog_term matches: lowercase_identifier | uppercase_identifier | number_literal
-        // Identifiers are ALREADY pushed by their respective uppercase/lowercase_identifier actions
-        // We ONLY need to handle numbers here (which don't have their own Datalog-specific actions)
-
+        // The uppercase/lowercase_identifier actions have already pushed to datalog_term_stack
+        // For number literals, we need to clean up expr_stack and push to datalog_term_stack
         std::string text = std::string(in.string());
 
-        // Check if it's a number (starts with digit or minus sign followed by digit)
-        if (!text.empty() && std::isdigit(text[0])) {
-            // It's a positive number - push to datalog_term_stack
-            Identifier term_id;
-            term_id.name = text;
-            term_id.loc = locFrom(in.position());
-            state.datalog_term_stack.push_back(std::move(term_id));
-        } else if (text.size() > 1 && text[0] == '-' && std::isdigit(text[1])) {
-            // It's a negative number - push to datalog_term_stack
+        // Check if it's a number
+        if (!text.empty() && (std::isdigit(text[0]) ||
+           (text.size() > 1 && (text[0] == '+' || text[0] == '-') && std::isdigit(text[1])))) {
+            // It's a number literal - the number_literal action pushed to both number_stack and expr_stack
+            // We need to pop from expr_stack (to avoid pollution) and push as Identifier to datalog_term_stack
+            if (!state.expr_stack.empty()) {
+                state.expr_stack.pop_back();
+            }
+            if (!state.number_stack.empty()) {
+                state.number_stack.pop_back();
+            }
+
             Identifier term_id;
             term_id.name = text;
             term_id.loc = locFrom(in.position());
             state.datalog_term_stack.push_back(std::move(term_id));
         }
         // Identifiers are already on the stack from uppercase/lowercase_identifier actions
-        // We do NOT push them again here to avoid PEG backtracking duplication issues
     }
 };
 
