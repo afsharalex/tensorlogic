@@ -351,11 +351,15 @@ struct projection_op : pegtl::sor<
     pegtl::one<'='>
 > {};
 
+// Tensor equation LHS: separate rule to enable marker tracking for PEG backtracking
+// This allows us to mark where the actual LHS is, ignoring backtracking artifacts
+struct tensor_equation_lhs : tensor_ref {};
+
 // Tensor equation: LHS projection_op RHS
 // Example: Y[i,k] = A[i,j] B[j,k]
 // Or with guards: Weighted[i] = 1.0 * X[i] : (i < 10) | 0.5 * X[i]
 struct tensor_equation : pegtl::seq<
-    tensor_ref,
+    tensor_equation_lhs,
     pad<projection_op>,
     clause_expression
 > {};

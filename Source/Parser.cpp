@@ -368,7 +368,17 @@ struct action<primary_expression> {
         }
 
         // Otherwise it's a tensor_ref, need to wrap it
+        // BUT: Due to PEG backtracking, there may be artifacts on the stack
+        // The marker points to the LHS - don't use items at or before the marker
         if (!state.tensorref_stack.empty()) {
+            size_t stack_pos = state.tensorref_stack.size() - 1;
+
+            // If this tensor ref is at or before the LHS marker, it's either the LHS or a backtracking artifact
+            // In either case, ignore it (LHS is handled by tensor_equation action)
+            if (stack_pos <= state.tensor_equation_lhs_marker) {
+                return;
+            }
+
             auto expr = std::make_shared<Expr>();
             expr->loc = locFrom(in.position());
             expr->node = ExprTensorRef{state.tensorref_stack.back()};
@@ -761,6 +771,36 @@ struct action<guarded_clause> {
 // ============================================================================
 
 template<>
+struct action<tensor_equation_lhs> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // When this rule matches, the underlying tensor_ref has been parsed
+        // BUT since we inherit from tensor_ref, the tensor_ref action does NOT fire
+        // We need to manually build and push the tensor ref ourselves
+
+        TensorRef ref;
+        ref.loc = locFrom(in.position());
+
+        // Pop the identifier for the tensor name
+        if (!state.identifier_stack.empty()) {
+            ref.name = std::move(state.identifier_stack.back());
+            state.identifier_stack.pop_back();
+        }
+
+        // Pop all indices that belong to this tensor ref
+        ref.indices = std::move(state.index_or_slice_stack);
+        state.index_or_slice_stack.clear();
+
+        // Push to tensorref_stack
+        state.tensorref_stack.push_back(std::move(ref));
+
+        // Set marker to point to the LHS we just pushed (at end of stack)
+        // This marker prevents PEG backtracking artifacts from being used in the RHS
+        state.tensor_equation_lhs_marker = state.tensorref_stack.size() - 1;
+    }
+};
+
+template<>
 struct action<projection_op> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
@@ -775,10 +815,11 @@ struct action<tensor_equation> {
         TensorEquation eq;
         eq.loc = locFrom(in.position());
 
-        // Pop LHS tensor ref
-        if (!state.tensorref_stack.empty()) {
-            eq.lhs = state.tensorref_stack.back();
-            state.tensorref_stack.pop_back();
+        // Due to PEG backtracking, there may be residue on tensorref_stack from failed parse attempts
+        // The marker points to the actual LHS position
+        // Get the LHS from the marker position
+        if (state.tensor_equation_lhs_marker < state.tensorref_stack.size()) {
+            eq.lhs = state.tensorref_stack[state.tensor_equation_lhs_marker];
         }
 
         // Get projection operator
@@ -788,6 +829,9 @@ struct action<tensor_equation> {
         // Pop all guarded clauses
         eq.clauses = std::move(state.clause_stack);
         state.clause_stack.clear();
+
+        // Clear ALL tensorref_stack items (backtracking artifacts + LHS)
+        state.tensorref_stack.clear();
 
         state.statements.push_back(std::move(eq));
     }

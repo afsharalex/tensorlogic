@@ -57,6 +57,9 @@ struct ParseState {
 
     // Datalog atom parsing markers (to handle PEG backtracking)
     size_t datalog_atom_term_start_marker{0};  // Marks where current atom's terms start on term_stack
+
+    // Tensor equation parsing markers (to handle PEG backtracking)
+    size_t tensor_equation_lhs_marker{0};  // Marks where tensor equation LHS is on tensorref_stack
 };
 
 // ============================================================================
@@ -112,6 +115,7 @@ template<> struct action<grammar::guarded_clause>;
 
 // Tensor equation actions
 template<> struct action<grammar::projection_op>;
+template<> struct action<grammar::tensor_equation_lhs>;
 template<> struct action<grammar::tensor_equation>;
 
 // Datalog actions
