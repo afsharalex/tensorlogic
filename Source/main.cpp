@@ -2,31 +2,76 @@
 #include "TL/Parser.hpp"
 #include "TL/backend.hpp"
 #include "TL/VM.hpp"
+#include "TL/Compiler.hpp"
+#include "TL/BytecodeVM.hpp"
 #include <iostream>
 #include <optional>
 #include <torch/torch.h>
 
+struct ExecutionOptions {
+  bool debug = false;
+  bool compile_only = false;
+  bool disassemble = false;
+  bool use_bytecode = false;
+};
+
 /// Parses, Evaluates/Executes the given '.tl' file
-void runFile(const std::string &fileName, bool debug) {
+void runFile(const std::string &fileName, const ExecutionOptions& options) {
   try {
     const tl::Program prog = tl::parseFile(fileName);
     std::cout << "Parsed program: " << prog.statements.size() << " statement(s)"
               << std::endl;
-    // Print a short preview
-    size_t count = 0;
-    for (const auto &st : prog.statements) {
-      if (count++ >= 10) {
-        std::cout << "..." << std::endl;
-        break;
+
+    // Print a short preview if not using bytecode
+    if (!options.use_bytecode) {
+      size_t count = 0;
+      for (const auto &st : prog.statements) {
+        if (count++ >= 10) {
+          std::cout << "..." << std::endl;
+          break;
+        }
+        std::cout << "  - " << tl::toString(st) << std::endl;
       }
-      std::cout << "  - " << tl::toString(st) << std::endl;
     }
 
-    // Execute program
-    tl::TensorLogicVM vm;
-    vm.setDebug(debug);
-    vm.execute(prog);
-    std::cout << "Executed program successfully." << std::endl;
+    if (options.use_bytecode || options.compile_only || options.disassemble) {
+      // Compile to bytecode
+      std::cout << "Compiling to bytecode..." << std::endl;
+      tl::Compiler compiler;
+      tl::BytecodeModule module = compiler.compile(prog);
+
+      std::cout << "Generated " << module.instructions.size() << " instructions, "
+                << module.constants.size() << " constants" << std::endl;
+
+      if (options.disassemble) {
+        std::cout << "\n" << tl::disassembleModule(module) << std::endl;
+      }
+
+      if (options.compile_only) {
+        std::cout << "Compilation complete (not executing)." << std::endl;
+        return;
+      }
+
+      // Execute bytecode
+      auto backend = tl::BackendFactory::create(tl::BackendType::LibTorch);
+      tl::Environment env;
+      std::ostream* out = options.debug ? &std::cout : nullptr;
+      tl::BytecodeVM vm(*backend, env, out);
+
+      if (options.debug) {
+        vm.debug(module);
+      } else {
+        vm.execute(module);
+      }
+
+      std::cout << "Bytecode execution complete." << std::endl;
+    } else {
+      // Execute with AST interpreter
+      tl::TensorLogicVM vm;
+      vm.setDebug(options.debug);
+      vm.execute(prog);
+      std::cout << "Executed program successfully." << std::endl;
+    }
   } catch (const tl::ParseError &e) {
     std::cerr << e.what() << std::endl;
   } catch (const std::exception &e) {
@@ -160,17 +205,34 @@ void printBackendEinsumDemo() {
 int main(const int argc, char **argv) {
 
   // Parse optional flags
-  bool debug = false;
+  ExecutionOptions options;
   int argi = 1;
   while (argi < argc && argv[argi][0] == '-') {
     std::string opt = argv[argi];
     if (opt == "--debug" || opt == "-d") {
-      debug = true;
+      options.debug = true;
+      ++argi;
+      continue;
+    } else if (opt == "--compile" || opt == "-c") {
+      options.compile_only = true;
+      ++argi;
+      continue;
+    } else if (opt == "--bytecode" || opt == "-b") {
+      options.use_bytecode = true;
+      ++argi;
+      continue;
+    } else if (opt == "--disassemble" || opt == "-D") {
+      options.disassemble = true;
       ++argi;
       continue;
     }
     std::cerr << "Unknown option: " << opt << "\n";
-    std::cerr << "Usage: tl [--debug|-d] <file.tl>\n";
+    std::cerr << "Usage: tl [options] <file.tl>\n";
+    std::cerr << "Options:\n";
+    std::cerr << "  --debug, -d         Enable debug output\n";
+    std::cerr << "  --bytecode, -b      Execute using bytecode VM\n";
+    std::cerr << "  --compile, -c       Compile to bytecode only (don't execute)\n";
+    std::cerr << "  --disassemble, -D   Show bytecode disassembly\n";
     return 1;
   }
 
@@ -185,7 +247,7 @@ int main(const int argc, char **argv) {
     }
 
     // Run file
-    runFile(fileName, debug);
+    runFile(fileName, options);
   } else {
     // Start REPL if no file provided
     runRepl();

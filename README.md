@@ -57,7 +57,7 @@ cmake -B build
 cmake --build build
 
 # Run
-./build/tl
+./build/tl [options] <file.tl>
 
 # Run tests
 ./build/tl_tests
@@ -139,6 +139,36 @@ cmake --build build --config Release
 
 # Run tests
 .\build\Release\tl_tests.exe
+```
+
+### Usage
+
+#### Command Line Options
+
+```bash
+./build/tl [options] <file.tl>
+
+Options:
+  --debug, -d         Enable debug output
+  --bytecode, -b      Execute using bytecode VM (experimental)
+  --compile, -c       Compile to bytecode only (don't execute)
+  --disassemble, -D   Show bytecode disassembly
+```
+
+#### Examples
+
+```bash
+# Run program with AST interpreter (default)
+./build/tl Examples/Programs/02_matrix_multiply.tl
+
+# Run program with bytecode VM
+./build/tl --bytecode Examples/Programs/02_matrix_multiply.tl
+
+# Compile and show disassembly without executing
+./build/tl --compile --disassemble Examples/Programs/02_matrix_multiply.tl
+
+# Enable debug output
+./build/tl --debug Examples/Programs/02_matrix_multiply.tl
 ```
 
 ### First Build Notes
@@ -241,10 +271,23 @@ sudo cmake --install build --prefix /usr/local
 TensorLogic is designed as a **thin wrapper** around PyTorch (libtorch):
 
 - **Parser**: PEGTL-based parser for tensor equations and Datalog syntax
+- **AST**: Abstract syntax tree representation
+- **Compiler**: AST to bytecode compiler (optional execution path)
+- **Bytecode VM**: Register-based bytecode interpreter (experimental)
+- **AST Interpreter**: Direct AST execution (default)
 - **Type System**: Type inference with PyTorch broadcasting rules
 - **Runtime**: Forward/backward chaining inference engine
 - **Autodiff**: Delegates to PyTorch's autograd
 - **Backend**: PyTorch handles all tensor operations (CPU/GPU/MPS)
+
+#### Execution Modes
+
+TensorLogic supports two execution modes:
+
+1. **AST Interpreter** (default): Directly interprets the abstract syntax tree
+2. **Bytecode VM** (experimental): Compiles to bytecode then executes via register-based VM
+
+The bytecode path is still experimental and may have incomplete features compared to the AST interpreter.
 
 ## Current Status
 

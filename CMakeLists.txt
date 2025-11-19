@@ -27,6 +27,9 @@ add_executable(tl
     Source/AST.cpp
     Source/backend_libtorch.cpp
     Source/VM.cpp
+    Source/Bytecode.cpp
+    Source/Compiler.cpp
+    Source/BytecodeVM.cpp
     Source/Runtime/ExecutorUtils.cpp
     Source/Runtime/DatalogEngine.cpp
     Source/Runtime/LearningEngine.cpp
@@ -74,6 +77,8 @@ add_executable(tl_tests
     Tests/Unit/test_datalog_arithmetic.cpp
     Tests/Unit/test_tensor_comparisons.cpp
     Tests/Unit/test_learning_directives.cpp
+    Tests/Unit/test_virtual_indexing.cpp
+    Tests/Unit/test_bytecode.cpp
 
     # Source files needed for tests
     Source/Parser.cpp
@@ -81,6 +86,9 @@ add_executable(tl_tests
     Source/AST.cpp
     Source/VM.cpp
     Source/backend_libtorch.cpp
+    Source/Bytecode.cpp
+    Source/Compiler.cpp
+    Source/BytecodeVM.cpp
     Source/Runtime/ExecutorUtils.cpp
     Source/Runtime/DatalogEngine.cpp
     Source/Runtime/LearningEngine.cpp
@@ -95,7 +103,6 @@ add_executable(tl_tests
     Source/Runtime/Executors/GuardedClauseExecutor.cpp
     Source/Runtime/Executors/ExpressionExecutor.cpp
     Source/Runtime/Preprocessors/VirtualIndexPreprocessor.cpp
-        Tests/Unit/test_virtual_indexing.cpp
 )
 
 target_include_directories(tl_tests PRIVATE
