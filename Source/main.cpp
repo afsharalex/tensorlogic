@@ -7,19 +7,31 @@
 #include <torch/torch.h>
 
 /// Parses, Evaluates/Executes the given '.tl' file
-void runFile(const std::string &fileName, bool debug) {
+void runFile(const std::string &fileName, bool debug, bool parseOnly) {
   try {
     const tl::Program prog = tl::parseFile(fileName);
     std::cout << "Parsed program: " << prog.statements.size() << " statement(s)"
               << std::endl;
-    // Print a short preview
-    size_t count = 0;
-    for (const auto &st : prog.statements) {
-      if (count++ >= 10) {
-        std::cout << "..." << std::endl;
-        break;
+
+    // Print statements
+    if (parseOnly) {
+      // Print all statements in parse-only mode
+      std::cout << "\n=== Parsed AST ===" << std::endl;
+      for (size_t i = 0; i < prog.statements.size(); ++i) {
+        std::cout << "[" << i << "] " << tl::toString(prog.statements[i]) << std::endl;
       }
-      std::cout << "  - " << tl::toString(st) << std::endl;
+      std::cout << "==================\n" << std::endl;
+      return;
+    } else {
+      // Print a short preview in normal mode
+      size_t count = 0;
+      for (const auto &st : prog.statements) {
+        if (count++ >= 10) {
+          std::cout << "..." << std::endl;
+          break;
+        }
+        std::cout << "  - " << tl::toString(st) << std::endl;
+      }
     }
 
     // Execute program
@@ -161,6 +173,7 @@ int main(const int argc, char **argv) {
 
   // Parse optional flags
   bool debug = false;
+  bool parseOnly = false;
   int argi = 1;
   while (argi < argc && argv[argi][0] == '-') {
     std::string opt = argv[argi];
@@ -169,8 +182,15 @@ int main(const int argc, char **argv) {
       ++argi;
       continue;
     }
+    if (opt == "--parse-only" || opt == "-p") {
+      parseOnly = true;
+      ++argi;
+      continue;
+    }
     std::cerr << "Unknown option: " << opt << "\n";
-    std::cerr << "Usage: tl [--debug|-d] <file.tl>\n";
+    std::cerr << "Usage: tl [--debug|-d] [--parse-only|-p] <file.tl>\n";
+    std::cerr << "  --debug, -d      Enable debug output during execution\n";
+    std::cerr << "  --parse-only, -p Parse and print AST without executing\n";
     return 1;
   }
 
@@ -185,7 +205,7 @@ int main(const int argc, char **argv) {
     }
 
     // Run file
-    runFile(fileName, debug);
+    runFile(fileName, debug, parseOnly);
   } else {
     // Start REPL if no file provided
     runRepl();

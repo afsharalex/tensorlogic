@@ -200,12 +200,23 @@ struct tensor_ref : pegtl::seq<
 // Forward declaration for recursive expressions
 struct expression;
 
-// Function call: function_name(arg1, arg2, ...)
+// Function argument list: captures everything between ( and ) as raw text
+// Must respect nested parentheses for nested function calls like tanh(sigmoid(a))
+// Strategy: match balanced parentheses or any other character
+struct function_arg_char : pegtl::sor<
+    pegtl::seq<pegtl::one<'('>, pegtl::star<function_arg_char>, pegtl::one<')'>>,  // Balanced parens
+    pegtl::seq<pegtl::not_at<pegtl::one<')'>>, pegtl::any>                          // Any char that's not ')'
+> {};
+
+struct function_arg_list : pegtl::star<function_arg_char> {};
+
+// Function call: function_name(arg_list)
 // Examples: relu(X), softmax(Y[i]), sigmoid(W[i,j] * X[j])
+// The function_arg_list rule captures raw text, and the action splits on top-level commas
 struct function_call : pegtl::seq<
     identifier,
     pad<pegtl::one<'('>>,
-    pegtl::opt<pegtl::list<pad<expression>, pegtl::one<','>>>,
+    function_arg_list,
     pad<pegtl::one<')'>>
 > {};
 
@@ -237,13 +248,24 @@ struct power_expression : pegtl::seq<
     >
 > {};
 
-// Multiplicative: *, /, %
+// Multiplicative: *, /, %, and implicit multiplication (space-separated)
+// Per BNF line 73: <multiplicative_expression> <power_expression> is implicit multiplication
 struct multiplicative_expression : pegtl::seq<
     power_expression,
     pegtl::star<
-        pegtl::seq<
-            pad<pegtl::one<'*', '/', '%'>>,
-            pad<power_expression>
+        pegtl::sor<
+            // Explicit operators: *, /, %
+            pegtl::seq<
+                pad<pegtl::one<'*', '/', '%'>>,
+                pad<power_expression>
+            >,
+            // Implicit multiplication: space-separated power_expression
+            // Must have at least one horizontal whitespace to distinguish from adjacency
+            pegtl::seq<
+                pegtl::plus<pegtl::sor<pegtl::one<' '>, pegtl::one<'\t'>>>,
+                pegtl::not_at<pegtl::one<'+', '-', ')', ']', ',', '?', ':', '|'>>,  // Don't consume these
+                power_expression
+            >
         >
     >
 > {};
@@ -282,21 +304,6 @@ struct comparison_expression : pegtl::seq<
 
 // Full expression (includes comparisons)
 struct expression : comparison_expression {};
-
-// RHS expression with implicit multiplication support
-// A B means A * B (space-separated without operator)
-// Terms in implicit multiplication are additive_expression (no comparisons)
-// This allows comparisons to work at the top level without being consumed by implicit multiplication
-// Used in tensor equations and Datalog neurosymbolic conditions
-struct rhs_expression : pegtl::seq<
-    hws,
-    additive_expression,  // No comparisons in terms
-    pegtl::star<pegtl::seq<
-        pegtl::plus<pegtl::sor<pegtl::one<' '>, pegtl::one<'\t'>>>,  // At least one space/tab
-        additive_expression  // No comparisons in terms
-    >>,
-    hws
-> {};
 
 // ============================================================================
 // GUARD CONDITIONS (for guarded clauses)
@@ -339,15 +346,15 @@ struct guard_condition : pegtl::seq<
     >
 > {};
 
-// Guarded clause expression: rhs_expression with optional comparison
+// Guarded clause expression: expression (with implicit multiplication in multiplicative level)
 // Allows: X[i], A B, X[i] < Y[i], etc.
-// The comparison is applied AFTER implicit multiplication resolves
+// Implicit multiplication is handled at multiplicative_expression level per BNF
 struct guarded_clause_expr : pegtl::seq<
-    rhs_expression,
+    expression,
     pegtl::opt<
         pegtl::seq<
             pad<comparison_op>,
-            pad<rhs_expression>
+            pad<expression>
         >
     >
 > {};
@@ -462,10 +469,11 @@ struct datalog_comparison : pegtl::seq<
 // Examples: Emb[x,d]Emb[y,d] > threshold, Score[i] >= 0.5
 // Used in neurosymbolic rules: Similar(x,y) <- Emb[x,d]Emb[y,d] > threshold
 // NOTE: Must be tried before datalog_atom to avoid ambiguity
+// Use additive_expression to avoid consuming the comparison operator in nested comparisons
 struct neurosymbolic_condition : pegtl::seq<
-    rhs_expression,
+    additive_expression,
     pad<comparison_op>,
-    pad<rhs_expression>
+    pad<additive_expression>
 > {};
 
 // Body literal (for rules): negated atoms, neurosymbolic conditions, comparisons, or atoms

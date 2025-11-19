@@ -63,6 +63,9 @@ struct ParseState {
 
     // List literal parsing markers (to handle nested lists)
     std::vector<size_t> list_marker_stack;  // Stack of markers for nested list literals
+
+    // Function call parsing marker (to prevent collecting expressions from before the function call)
+    size_t function_arg_start_marker{0};  // Marks where function arguments start on expr_stack
 };
 
 // ============================================================================

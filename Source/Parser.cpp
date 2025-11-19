@@ -324,6 +324,143 @@ struct action<tensor_ref> {
 // ============================================================================
 
 template<>
+struct action<function_arg_list> {
+    template<typename Input>
+    static void apply(const Input& in, ParseState& state) {
+        // Mark where function arguments start on the expr_stack
+        // This prevents the function_call action from consuming expressions
+        // that were pushed BEFORE this function call started
+        state.function_arg_start_marker = state.expr_stack.size();
+
+        // Get the raw argument text
+        std::string args_text = std::string(in.string());
+
+        // Trim leading/trailing whitespace
+        size_t start = args_text.find_first_not_of(" \t\n\r");
+        if (start == std::string::npos) {
+            // Empty argument list
+            return;
+        }
+        size_t end = args_text.find_last_not_of(" \t\n\r");
+        args_text = args_text.substr(start, end - start + 1);
+
+        if (args_text.empty()) {
+            return;
+        }
+
+        // Split on top-level commas (not inside brackets or parens)
+        std::vector<std::string> arg_strings;
+        std::string current_arg;
+        int depth = 0;
+
+        for (char c : args_text) {
+            if (c == '(' || c == '[') {
+                depth++;
+                current_arg += c;
+            } else if (c == ')' || c == ']') {
+                depth--;
+                current_arg += c;
+            } else if (c == ',' && depth == 0) {
+                // Top-level comma - this is an argument separator
+                if (!current_arg.empty()) {
+                    arg_strings.push_back(current_arg);
+                }
+                current_arg.clear();
+            } else {
+                current_arg += c;
+            }
+        }
+
+        // Don't forget the last argument
+        if (!current_arg.empty()) {
+            arg_strings.push_back(current_arg);
+        }
+
+        // Parse each argument as an expression using the main parser
+        for (const auto& arg_str : arg_strings) {
+            // Trim the argument string
+            size_t arg_start = arg_str.find_first_not_of(" \t\n\r");
+            if (arg_start == std::string::npos) continue;
+            size_t arg_end = arg_str.find_last_not_of(" \t\n\r");
+            std::string trimmed_arg = arg_str.substr(arg_start, arg_end - arg_start + 1);
+
+            // Inject '*' for implicit multiplication
+            // Replace spaces between tokens with ' * ' to make it explicit
+            std::string explicit_arg;
+            int bracket_depth = 0;
+            bool prev_was_token = false;
+
+            for (size_t i = 0; i < trimmed_arg.size(); ++i) {
+                char c = trimmed_arg[i];
+
+                if (c == '[' || c == '(') {
+                    bracket_depth++;
+                    explicit_arg += c;
+                    prev_was_token = false;
+                } else if (c == ']' || c == ')') {
+                    bracket_depth--;
+                    explicit_arg += c;
+                    prev_was_token = true;  // Closing bracket counts as end of token
+                } else if ((c == ' ' || c == '\t') && bracket_depth == 0) {
+                    // Space at top level - check if it represents implicit multiplication
+                    if (prev_was_token && i + 1 < trimmed_arg.size()) {
+                        // Peek ahead to see what follows
+                        size_t j = i + 1;
+                        while (j < trimmed_arg.size() && (trimmed_arg[j] == ' ' || trimmed_arg[j] == '\t')) j++;
+                        if (j < trimmed_arg.size()) {
+                            char next_char = trimmed_arg[j];
+                            // Check if previous character was an operator
+                            // If the last character added was an operator, don't inject *
+                            bool after_operator = false;
+                            if (!explicit_arg.empty()) {
+                                char last_char = explicit_arg.back();
+                                after_operator = (last_char == '+' || last_char == '-' ||
+                                                 last_char == '*' || last_char == '/' ||
+                                                 last_char == '%' || last_char == '^' ||
+                                                 last_char == '(' || last_char == ',');
+                            }
+                            // If next is start of a token (not an operator) AND we're not after an operator, inject *
+                            if (!after_operator && (std::isalnum(next_char) || next_char == '_' || next_char == '(')) {
+                                explicit_arg += " * ";
+                                prev_was_token = false;
+                                // Skip remaining spaces
+                                i = j - 1;  // Will be incremented by loop
+                                continue;
+                            }
+                        }
+                    }
+                    // Otherwise just keep the space
+                    explicit_arg += c;
+                } else if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+                    // Non-space character
+                    explicit_arg += c;
+                    prev_was_token = true;
+                } else {
+                    explicit_arg += c;
+                }
+            }
+
+            // Parse as expression by wrapping in a dummy assignment
+            std::string wrapped = "dummy = " + explicit_arg;
+
+            try {
+                auto parsed = tl::parseProgram(wrapped);
+                if (!parsed.statements.empty()) {
+                    if (auto* eq = std::get_if<TensorEquation>(&parsed.statements[0])) {
+                        if (!eq->clauses.empty() && eq->clauses[0].expr) {
+                            state.expr_stack.push_back(eq->clauses[0].expr);
+                        }
+                    }
+                }
+            } catch (const std::exception&) {
+                // If parsing fails, we have a malformed argument - skip it
+                // In production, we might want to throw an error here
+            }
+        }
+    }
+};
+
+template<>
 struct action<function_call> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
@@ -331,6 +468,7 @@ struct action<function_call> {
 
         // Extract function name from matched text (before the opening paren)
         std::string matched = std::string(in.string());
+
         size_t paren_pos = matched.find('(');
         if (paren_pos != std::string::npos) {
             std::string func_name = matched.substr(0, paren_pos);
@@ -345,9 +483,19 @@ struct action<function_call> {
         // Clear all identifiers from the stack (function name + any from arguments)
         state.identifier_stack.clear();
 
-        // Collect arguments from expression stack
-        call.args = std::move(state.expr_stack);
-        state.expr_stack.clear();
+        // Collect ONLY the arguments that were pushed by function_arg_list
+        // The marker tells us where function arguments start on expr_stack
+        std::vector<ExprPtr> args;
+        for (size_t i = state.function_arg_start_marker; i < state.expr_stack.size(); ++i) {
+            args.push_back(state.expr_stack[i]);
+        }
+        call.args = std::move(args);
+
+        // Remove ONLY the function arguments from expr_stack (not earlier expressions)
+        state.expr_stack.erase(
+            state.expr_stack.begin() + state.function_arg_start_marker,
+            state.expr_stack.end()
+        );
 
         // Wrap in Expr and push back
         auto expr = std::make_shared<Expr>();
@@ -460,39 +608,84 @@ template<>
 struct action<multiplicative_expression> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
-        // Parse the input to find operators
+        // Parse the input to find explicit operators AND implicit multiplication (spaces)
         std::string text = std::string(in.string());
 
-        // Count how many operators we have
-        size_t op_count = 0;
-        for (char c : text) {
-            if (c == '*' || c == '/' || c == '%') op_count++;
+        // If we only have one expression on the stack, nothing to do
+        if (state.expr_stack.size() <= 1) {
+            return;
         }
 
-        if (op_count > 0 && state.expr_stack.size() > op_count) {
-            // Build left-to-right: ((A * B) / C) % D
-            // Bottom of relevant portion of stack has leftmost operand
-            size_t start_idx = state.expr_stack.size() - op_count - 1;
+        // Scan through the matched text to identify operators
+        // Operators can be: *, /, %, or implicit (space between power_expressions)
+        std::vector<char> operators;  // '*', '/', '%', or ' ' for implicit
+
+        size_t i = 0;
+        bool in_expr = false;
+        int paren_depth = 0;
+
+        while (i < text.size()) {
+            char c = text[i];
+
+            if (c == '(') paren_depth++;
+            else if (c == ')') paren_depth--;
+            else if (paren_depth == 0) {
+                // Only recognize operators at top level (not inside parens)
+                if (c == '*' || c == '/' || c == '%') {
+                    operators.push_back(c);
+                    in_expr = false;
+                } else if (c == ' ' || c == '\t') {
+                    // Check if this space separates expressions (implicit multiplication)
+                    if (in_expr && i + 1 < text.size()) {
+                        // Peek ahead to see if there's a non-space character
+                        size_t j = i + 1;
+                        while (j < text.size() && (text[j] == ' ' || text[j] == '\t')) j++;
+                        if (j < text.size() && text[j] != '*' && text[j] != '/' && text[j] != '%' &&
+                            text[j] != '+' && text[j] != '-' && text[j] != ')' && text[j] != ']' &&
+                            text[j] != ',' && text[j] != '?' && text[j] != ':' && text[j] != '|') {
+                            // This space represents implicit multiplication
+                            operators.push_back(' ');
+                            in_expr = false;
+                        }
+                    }
+                } else if (c != '\n' && c != '\r') {
+                    in_expr = true;
+                }
+            }
+            i++;
+        }
+
+        // If we have operators, build the expression tree left-to-right
+        if (!operators.empty() && state.expr_stack.size() > operators.size()) {
+            size_t start_idx = state.expr_stack.size() - operators.size() - 1;
             auto result = state.expr_stack[start_idx];
 
-            // Find operators in order from matched text
-            size_t operand_idx = start_idx + 1;
-            for (size_t pos = 0; pos < text.size() && operand_idx < state.expr_stack.size(); pos++) {
-                char c = text[pos];
-                if (c == '*' || c == '/' || c == '%') {
-                    auto binary = std::make_shared<Expr>();
-                    binary->loc = result->loc;
+            for (size_t op_idx = 0; op_idx < operators.size(); ++op_idx) {
+                auto binary = std::make_shared<Expr>();
+                binary->loc = result->loc;
 
-                    ExprBinary bin;
-                    bin.op = (c == '*') ? ExprBinary::Op::Mul :
-                             (c == '/') ? ExprBinary::Op::Div :
-                                          ExprBinary::Op::Mod;
-                    bin.lhs = result;
-                    bin.rhs = state.expr_stack[operand_idx++];
-                    binary->node = std::move(bin);
+                ExprBinary bin;
+                char op = operators[op_idx];
 
-                    result = binary;
+                if (op == '*') {
+                    bin.op = ExprBinary::Op::Mul;
+                    bin.implicit = false;
+                } else if (op == '/') {
+                    bin.op = ExprBinary::Op::Div;
+                    bin.implicit = false;
+                } else if (op == '%') {
+                    bin.op = ExprBinary::Op::Mod;
+                    bin.implicit = false;
+                } else if (op == ' ') {
+                    bin.op = ExprBinary::Op::Mul;
+                    bin.implicit = true;  // Mark as implicit multiplication
                 }
+
+                bin.lhs = result;
+                bin.rhs = state.expr_stack[start_idx + op_idx + 1];
+                binary->node = std::move(bin);
+
+                result = binary;
             }
 
             // Remove operands from stack and push result

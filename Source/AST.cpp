@@ -97,8 +97,6 @@ std::string toString(const Expr& e) {
                 case ExprBinary::Op::Add: return toString(*b.lhs) + "+" + toString(*b.rhs);
                 case ExprBinary::Op::Sub: return toString(*b.lhs) + "-" + toString(*b.rhs);
                 case ExprBinary::Op::Mul:
-                    // For implicit multiplication, omit the * operator
-                    if (b.implicit) return toString(*b.lhs) + toString(*b.rhs);
                     return toString(*b.lhs) + "*" + toString(*b.rhs);
                 case ExprBinary::Op::Div: return toString(*b.lhs) + "/" + toString(*b.rhs);
                 case ExprBinary::Op::Mod: return toString(*b.lhs) + "%" + toString(*b.rhs);
