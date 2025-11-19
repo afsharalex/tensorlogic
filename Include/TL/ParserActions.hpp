@@ -130,7 +130,7 @@ template<> struct action<grammar::tensor_equation>;
 // Datalog actions
 template<> struct action<grammar::uppercase_identifier>;
 template<> struct action<grammar::lowercase_identifier>;
-template<> struct action<grammar::datalog_term>;
+template<> struct action<grammar::datalog_term_raw>;
 template<> struct action<grammar::datalog_relation_name>;
 template<> struct action<grammar::datalog_atom>;
 template<> struct action<grammar::datalog_negation>;

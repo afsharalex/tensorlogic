@@ -1155,32 +1155,70 @@ struct action<lowercase_identifier> {
 };
 
 template<>
-struct action<datalog_term> {
+struct action<datalog_term_raw> {
     template<typename Input>
     static void apply(const Input& in, ParseState& state) {
-        // datalog_term matches: lowercase_identifier | uppercase_identifier | number_literal
-        // The uppercase/lowercase_identifier actions have already pushed to datalog_term_stack
-        // For number literals, we need to clean up expr_stack and push to datalog_term_stack
+        // datalog_term_raw captures raw text for a single term
+        // Similar to function_arg_list, we parse it separately to build the AST
         std::string text = std::string(in.string());
 
-        // Check if it's a number
-        if (!text.empty() && (std::isdigit(text[0]) ||
-           (text.size() > 1 && (text[0] == '+' || text[0] == '-') && std::isdigit(text[1])))) {
-            // It's a number literal - the number_literal action pushed to both number_stack and expr_stack
-            // We need to pop from expr_stack (to avoid pollution) and push as Identifier to datalog_term_stack
-            if (!state.expr_stack.empty()) {
-                state.expr_stack.pop_back();
-            }
-            if (!state.number_stack.empty()) {
-                state.number_stack.pop_back();
-            }
+        // Trim whitespace
+        size_t start = text.find_first_not_of(" \t\n\r");
+        if (start == std::string::npos) return; // Empty term
+        size_t end = text.find_last_not_of(" \t\n\r");
+        std::string trimmed = text.substr(start, end - start + 1);
 
-            Identifier term_id;
-            term_id.name = text;
-            term_id.loc = locFrom(in.position());
-            state.datalog_term_stack.push_back(std::move(term_id));
+        // Check if it's an arithmetic expression (contains operators or function calls)
+        bool has_operators = (trimmed.find('+') != std::string::npos ||
+                             trimmed.find('*') != std::string::npos ||
+                             trimmed.find('/') != std::string::npos ||
+                             trimmed.find('%') != std::string::npos ||
+                             trimmed.find('^') != std::string::npos ||
+                             trimmed.find('(') != std::string::npos);
+
+        // Special case for '-': could be unary minus or subtraction operator
+        bool has_minus_op = false;
+        if (trimmed.find('-') != std::string::npos) {
+            size_t minus_pos = trimmed.find('-');
+            // If '-' appears in the middle, it's likely an operator
+            // If at start followed by non-digit or multiple chars, also likely an operator
+            if (minus_pos > 0 || (minus_pos == 0 && trimmed.size() > 1 && !std::isdigit(trimmed[1]))) {
+                has_minus_op = true;
+            }
         }
-        // Identifiers are already on the stack from uppercase/lowercase_identifier actions
+
+        bool is_expr = has_operators || has_minus_op;
+
+        if (is_expr) {
+            // Parse as expression using the main parser
+            std::string wrapped = "dummy = " + trimmed;
+            try {
+                auto parsed = tl::parseProgram(wrapped);
+                if (!parsed.statements.empty()) {
+                    if (auto* eq = std::get_if<TensorEquation>(&parsed.statements[0])) {
+                        if (!eq->clauses.empty() && eq->clauses[0].expr) {
+                            // Push a marker to signal this term is an expression
+                            Identifier term_marker;
+                            term_marker.name = "<EXPR>";
+                            term_marker.loc = locFrom(in.position());
+                            state.datalog_term_stack.push_back(std::move(term_marker));
+
+                            // Store the expression for later retrieval
+                            state.expr_stack.push_back(eq->clauses[0].expr);
+                            return;
+                        }
+                    }
+                }
+            } catch (const std::exception&) {
+                // If parsing fails, treat as simple identifier
+            }
+        }
+
+        // Simple term (identifier or number)
+        Identifier term_id;
+        term_id.name = trimmed;
+        term_id.loc = locFrom(in.position());
+        state.datalog_term_stack.push_back(std::move(term_id));
     }
 };
 
@@ -1222,10 +1260,29 @@ struct action<datalog_atom> {
             atom.relation = state.datalog_term_stack[start_pos];
 
             // Remaining elements after the relation are terms
+            // Count how many <EXPR> markers we have (to know how many to pop from expr_stack)
+            size_t expr_marker_count = 0;
+            for (size_t i = start_pos + 1; i < state.datalog_term_stack.size(); ++i) {
+                if (state.datalog_term_stack[i].name == "<EXPR>") {
+                    expr_marker_count++;
+                }
+            }
+
+            // Now process terms, popping from expr_stack when we see <EXPR> markers
+            size_t expr_stack_pop_count = 0;
             for (size_t i = start_pos + 1; i < state.datalog_term_stack.size(); ++i) {
                 const auto& id = state.datalog_term_stack[i];
-                // Check if it's uppercase (constant), lowercase (variable), or number
-                if (!id.name.empty() && std::isupper(id.name[0])) {
+
+                // Check if it's an expression marker
+                if (id.name == "<EXPR>") {
+                    // Pop expression from expr_stack (in reverse order since we process left-to-right)
+                    size_t expr_idx = state.expr_stack.size() - expr_marker_count + expr_stack_pop_count;
+                    if (expr_idx < state.expr_stack.size()) {
+                        // Add ExprPtr to terms
+                        atom.terms.push_back(state.expr_stack[expr_idx]);
+                        expr_stack_pop_count++;
+                    }
+                } else if (!id.name.empty() && std::isupper(id.name[0])) {
                     // Uppercase -> constant -> StringLiteral
                     StringLiteral lit;
                     lit.text = id.name;
@@ -1242,6 +1299,14 @@ struct action<datalog_atom> {
                     // Lowercase or other -> variable -> Identifier
                     atom.terms.push_back(id);
                 }
+            }
+
+            // Remove expressions from expr_stack that we consumed
+            if (expr_marker_count > 0 && state.expr_stack.size() >= expr_marker_count) {
+                state.expr_stack.erase(
+                    state.expr_stack.end() - expr_marker_count,
+                    state.expr_stack.end()
+                );
             }
 
             // Remove ONLY the terms belonging to this atom (from marker onward)

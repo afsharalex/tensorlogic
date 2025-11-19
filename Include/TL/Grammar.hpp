@@ -418,15 +418,18 @@ struct lowercase_identifier : pegtl::seq<
     pegtl::star<pegtl::sor<pegtl::alnum, pegtl::one<'_'>>>
 > {};
 
-// Datalog term: variable (lowercase) or constant (uppercase/number)
-struct datalog_term : pegtl::sor<
-    lowercase_identifier,  // variables
-    uppercase_identifier,  // constants
-    number_literal        // numeric constants
+// Datalog term as raw text: captures everything up to comma or closing paren
+// Similar to function_arg_list, we capture raw text to avoid PEG consumption issues
+// This allows complex expressions like "c1 + c2" to be parsed as a single term
+struct datalog_term_char : pegtl::sor<
+    pegtl::seq<pegtl::one<'('>, pegtl::star<datalog_term_char>, pegtl::one<')'>>,  // Balanced parens
+    pegtl::seq<pegtl::not_at<pegtl::one<',', ')'>>, pegtl::any>                     // Any char that's not ',' or ')'
 > {};
 
-// Term list: comma-separated terms
-struct datalog_term_list : pegtl::list<pad<datalog_term>, pegtl::one<','>> {};
+struct datalog_term_raw : pegtl::plus<datalog_term_char> {};
+
+// Term list: comma-separated raw terms
+struct datalog_term_list : pegtl::list<pad<datalog_term_raw>, pegtl::one<','>> {};
 
 // Relation name: uppercase identifier that starts an atom
 // This separate rule allows us to track when atom parsing begins (for PEG backtracking handling)
@@ -456,13 +459,17 @@ struct datalog_negation : pegtl::seq<
     pad<datalog_atom>
 > {};
 
+// Simple datalog term for comparisons: just identifiers or numbers (no complex expressions)
+// Used in comparison literals in rule bodies
+struct datalog_simple_term : pegtl::sor<lowercase_identifier, uppercase_identifier, number_literal> {};
+
 // Comparison literal: term op term (for inequality constraints in rules)
 // Examples: x != y, x > 5, age >= 18
 // Used in rule bodies: Adult(p) <- Age(p, a), a >= 18
 struct datalog_comparison : pegtl::seq<
-    datalog_term,
+    datalog_simple_term,
     pad<comparison_op>,
-    pad<datalog_term>
+    pad<datalog_simple_term>
 > {};
 
 // Neurosymbolic condition: expr op expr (for tensor expression comparisons in rules)
@@ -476,13 +483,14 @@ struct neurosymbolic_condition : pegtl::seq<
     pad<additive_expression>
 > {};
 
-// Body literal (for rules): negated atoms, neurosymbolic conditions, comparisons, or atoms
-// Order matters: try neurosymbolic_condition before datalog_atom to handle tensor expressions
+// Body literal (for rules): negated atoms, comparisons, neurosymbolic conditions, or atoms
+// Order matters: try datalog_comparison before neurosymbolic_condition to avoid ambiguity
+// with simple comparisons like "x != y"
 // Examples: Friend(x, y), not Friend(x, y), x != y, Emb[x,d]Emb[y,d] > threshold
 struct datalog_body_literal : pegtl::sor<
     datalog_negation,
-    neurosymbolic_condition,
     datalog_comparison,
+    neurosymbolic_condition,
     datalog_atom
 > {};
 

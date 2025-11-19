@@ -24,7 +24,7 @@ TEST_CASE("Tensor equation: simple add/sub/mul/div") {
     {
         auto p = parseProgram("Y[i,k] = W[i,j] X[j,k]\n");
         REQUIRE(p.statements.size() == 1);
-        CHECK(first(p) == "Y[i,k] = W[i,j]X[j,k]");
+        CHECK(first(p) == "Y[i,k] = W[i,j]*X[j,k]");
     }
     {
         auto p = parseProgram("Y[i] = X[i] / Z\n");
@@ -88,6 +88,6 @@ TEST_CASE("Datalog rules: simple and mixed neurosymbolic condition") {
     {
         auto p = parseProgram("Similar(x,y) <- Emb[x,d] Emb[y,d] > threshold\n");
         REQUIRE(p.statements.size() == 1);
-        CHECK(first(p) == "Similar(x,y) <- Emb[x,d]Emb[y,d] > threshold");
+        CHECK(first(p) == "Similar(x,y) <- Emb[x,d]*Emb[y,d] > threshold");
     }
 }

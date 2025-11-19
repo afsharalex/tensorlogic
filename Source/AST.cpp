@@ -130,8 +130,11 @@ static std::string datalogAtomToString(const DatalogAtom& a) {
         if (i) oss << ',';
         if (std::holds_alternative<Identifier>(a.terms[i])) {
             oss << std::get<Identifier>(a.terms[i]).name;
-        } else {
+        } else if (std::holds_alternative<StringLiteral>(a.terms[i])) {
             oss << std::get<StringLiteral>(a.terms[i]).text;
+        } else {
+            // ExprPtr for arithmetic expressions
+            oss << toString(*std::get<ExprPtr>(a.terms[i]));
         }
     }
     oss << ')';
