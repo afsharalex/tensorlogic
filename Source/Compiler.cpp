@@ -2,6 +2,7 @@
 // Implementation of AST to Bytecode compiler
 
 #include "TL/Compiler.hpp"
+#include "TL/VisitorUtils.hpp"
 #include "TL/vm.hpp"
 #include <iostream>
 #include <sstream>
@@ -89,7 +90,7 @@ Compiler::Compiler(const CompilerOptions& opts)
     : options_(opts) {
 }
 
-BytecodeModule Compiler::compile(const Program& program) {
+Result<BytecodeModule, CompilerError> Compiler::compile(const Program& program) {
     // Reset state
     module_ = BytecodeModule();
     symbols_ = SymbolTable();
@@ -97,8 +98,6 @@ BytecodeModule Compiler::compile(const Program& program) {
     labels_.clear();
     unresolved_jumps_.clear();
     register_constants_.clear();
-    last_error_.clear();
-    success_ = true;
 
     if (options_.verbose) {
         std::cout << "Compiling TensorLogic program (" << program.statements.size()
@@ -110,9 +109,9 @@ BytecodeModule Compiler::compile(const Program& program) {
 
     // Phase 2: Code generation
     for (const auto& stmt : program.statements) {
-        compileStatement(stmt);
-        if (!success_) {
-            break;
+        auto result = compileStatement(stmt);
+        if (result.isErr()) {
+            return Result<BytecodeModule, CompilerError>::Err(std::move(result.error()));
         }
     }
 
@@ -125,49 +124,53 @@ BytecodeModule Compiler::compile(const Program& program) {
         if (it != labels_.end()) {
             patchJump(jump_pc, it->second);
         } else {
-            error("Undefined label: " + label);
+            return Result<BytecodeModule, CompilerError>::Err(
+                makeError(CompilerErrorKind::UndefinedLabel, "Undefined label: " + label));
         }
     }
 
     // Phase 3: Optimization
-    if (options_.optimize && success_) {
+    if (options_.optimize) {
         runOptimizationPasses();
     }
 
     if (options_.verbose) {
-        std::cout << "Compilation " << (success_ ? "succeeded" : "failed") << std::endl;
+        std::cout << "Compilation succeeded" << std::endl;
         std::cout << "Generated " << module_.instructions.size() << " instructions" << std::endl;
         std::cout << "Using " << registers_.getMaxRegister() << " registers" << std::endl;
     }
 
-    return module_;
+    return Result<BytecodeModule, CompilerError>::Ok(std::move(module_));
 }
 
 // ============================================================================
 // STATEMENT COMPILATION
 // ============================================================================
 
-void Compiler::compileStatement(const Statement& stmt) {
-    std::visit([this](const auto& s) {
-        using T = std::decay_t<decltype(s)>;
-
-        if constexpr (std::is_same_v<T, TensorEquation>) {
-            compileEquation(s);
-        } else if constexpr (std::is_same_v<T, DatalogFact>) {
-            compileDatalogFact(s);
-        } else if constexpr (std::is_same_v<T, DatalogRule>) {
-            compileDatalogRule(s);
-        } else if constexpr (std::is_same_v<T, Query>) {
-            compileQuery(s);
-        } else if constexpr (std::is_same_v<T, FileOperation>) {
-            compileFileOperation(s);
-        } else if constexpr (std::is_same_v<T, FixedPointLoop>) {
+Result<void, CompilerError> Compiler::compileStatement(const Statement& stmt) {
+    return std::visit(overloaded{
+        [this](const TensorEquation& eq) -> Result<void, CompilerError> {
+            return compileEquation(eq);
+        },
+        [this](const DatalogFact& fact) -> Result<void, CompilerError> {
+            return compileDatalogFact(fact);
+        },
+        [this](const DatalogRule& rule) -> Result<void, CompilerError> {
+            return compileDatalogRule(rule);
+        },
+        [this](const Query& query) -> Result<void, CompilerError> {
+            return compileQuery(query);
+        },
+        [this](const FileOperation& op) -> Result<void, CompilerError> {
+            return compileFileOperation(op);
+        },
+        [this](const FixedPointLoop&) -> Result<void, CompilerError> {
             // TODO: Implement fixed-point loop compilation
             if (options_.verbose) {
                 std::cout << "Note: Fixed-point loops not yet compiled to bytecode" << std::endl;
             }
+            return Result<void, CompilerError>::Ok();
         }
-        // Note: Comments don't exist as statements in the new AST
     }, stmt);
 }
 
@@ -175,7 +178,7 @@ void Compiler::compileStatement(const Statement& stmt) {
 // TENSOR EQUATION COMPILATION
 // ============================================================================
 
-void Compiler::compileEquation(const TensorEquation& eq) {
+Result<void, CompilerError> Compiler::compileEquation(const TensorEquation& eq) {
     if (options_.verbose) {
         std::cout << "Compiling equation..." << std::endl;
     }
@@ -184,14 +187,18 @@ void Compiler::compileEquation(const TensorEquation& eq) {
 
     // For now, compile the first clause only (TODO: support guarded clauses)
     if (eq.clauses.empty()) {
-        error("Equation has no clauses");
-        return;
+        return Result<void, CompilerError>::Err(
+            makeError(CompilerErrorKind::Semantic, "Equation has no clauses"));
     }
 
     const GuardedClause& clause = eq.clauses[0];
 
     // Compile RHS expression
-    uint16_t rhs_reg = compileExpression(*clause.expr);
+    auto rhs_result = compileExpression(*clause.expr);
+    if (rhs_result.isErr()) {
+        return Result<void, CompilerError>::Err(std::move(rhs_result.error()));
+    }
+    uint16_t rhs_reg = rhs_result.value();
 
     // Store result to variable
     emitStoreVar(rhs_reg, lhs_name);
@@ -205,38 +212,45 @@ void Compiler::compileEquation(const TensorEquation& eq) {
     // TODO: Handle indexed assignments
     // TODO: Handle guarded clauses
     // TODO: Handle multiple clauses (additive)
+
+    return Result<void, CompilerError>::Ok();
 }
 
 // ============================================================================
 // EXPRESSION COMPILATION
 // ============================================================================
 
-uint16_t Compiler::compileExpression(const Expr& expr) {
-    return std::visit([this](const auto& e) -> uint16_t {
-        using T = std::decay_t<decltype(e)>;
-
-        if constexpr (std::is_same_v<T, ExprNumber>) {
+Result<uint16_t, CompilerError> Compiler::compileExpression(const Expr& expr) {
+    return std::visit(overloaded{
+        [this](const ExprNumber& e) -> Result<uint16_t, CompilerError> {
             return compileNumberLiteral(e.literal);
-        } else if constexpr (std::is_same_v<T, ExprList>) {
+        },
+        [this](const ExprList& e) -> Result<uint16_t, CompilerError> {
             return compileListLiteral(e);
-        } else if constexpr (std::is_same_v<T, ExprTensorRef>) {
+        },
+        [this](const ExprTensorRef& e) -> Result<uint16_t, CompilerError> {
             return compileTensorRef(e.ref);
-        } else if constexpr (std::is_same_v<T, ExprCall>) {
+        },
+        [this](const ExprCall& e) -> Result<uint16_t, CompilerError> {
             return compileFunctionCall(e);
-        } else if constexpr (std::is_same_v<T, ExprBinary>) {
+        },
+        [this](const ExprBinary& e) -> Result<uint16_t, CompilerError> {
             return compileArithmetic(e.op, *e.lhs, *e.rhs);
-        } else if constexpr (std::is_same_v<T, ExprUnary>) {
+        },
+        [this](const ExprUnary& e) -> Result<uint16_t, CompilerError> {
             return compileUnary(e.op, *e.operand);
-        } else if constexpr (std::is_same_v<T, ExprParen>) {
+        },
+        [this](const ExprParen& e) -> Result<uint16_t, CompilerError> {
             return compileExpression(*e.inner);
-        } else {
-            error("Unknown expression type");
-            return 0;
+        },
+        [this](const auto&) -> Result<uint16_t, CompilerError> {
+            return Result<uint16_t, CompilerError>::Err(
+                makeError(CompilerErrorKind::InvalidExpression, "Unknown expression type"));
         }
     }, expr.node);
 }
 
-uint16_t Compiler::compileNumberLiteral(const NumberLiteral& lit) {
+Result<uint16_t, CompilerError> Compiler::compileNumberLiteral(const NumberLiteral& lit) {
     // Parse the number literal
     Constant c;
     try {
@@ -250,8 +264,8 @@ uint16_t Compiler::compileNumberLiteral(const NumberLiteral& lit) {
             c = Constant(std::stoll(lit.text));
         }
     } catch (...) {
-        error("Invalid number literal: " + lit.text);
-        c = Constant(int64_t(0));
+        return Result<uint16_t, CompilerError>::Err(
+            makeError(CompilerErrorKind::InvalidLiteral, "Invalid number literal: " + lit.text));
     }
 
     uint16_t dest_reg = registers_.allocate();
@@ -260,32 +274,40 @@ uint16_t Compiler::compileNumberLiteral(const NumberLiteral& lit) {
     // Track as constant
     register_constants_[dest_reg] = c;
 
-    return dest_reg;
+    return Result<uint16_t, CompilerError>::Ok(dest_reg);
 }
 
-uint16_t Compiler::compileListLiteral(const ExprList& lit) {
+Result<uint16_t, CompilerError> Compiler::compileListLiteral(const ExprList& lit) {
     // Convert list literal to tensor constant
     std::vector<double> values;
+    std::string error_msg;
 
     // Recursively extract values from nested lists
-    std::function<void(const ExprPtr&)> extractValues = [&](const ExprPtr& elem) {
+    std::function<bool(const ExprPtr&)> extractValues = [&](const ExprPtr& elem) -> bool {
         if (std::holds_alternative<ExprNumber>(elem->node)) {
             const auto& num = std::get<ExprNumber>(elem->node);
             try {
                 values.push_back(std::stod(num.literal.text));
             } catch (...) {
-                error("Invalid number in list: " + num.literal.text);
+                error_msg = "Invalid number in list: " + num.literal.text;
+                return false;
             }
         } else if (std::holds_alternative<ExprList>(elem->node)) {
             const auto& nested = std::get<ExprList>(elem->node);
             for (const auto& nested_elem : nested.elements) {
-                extractValues(nested_elem);
+                if (!extractValues(nested_elem)) {
+                    return false;
+                }
             }
         }
+        return true;
     };
 
     for (const auto& elem : lit.elements) {
-        extractValues(elem);
+        if (!extractValues(elem)) {
+            return Result<uint16_t, CompilerError>::Err(
+                makeError(CompilerErrorKind::InvalidLiteral, error_msg));
+        }
     }
 
     // Create tensor from values
@@ -295,16 +317,16 @@ uint16_t Compiler::compileListLiteral(const ExprList& lit) {
     uint16_t dest_reg = registers_.allocate();
     emitLoadConst(dest_reg, c);
 
-    return dest_reg;
+    return Result<uint16_t, CompilerError>::Ok(dest_reg);
 }
 
-uint16_t Compiler::compileTensorRef(const TensorRef& ref) {
+Result<uint16_t, CompilerError> Compiler::compileTensorRef(const TensorRef& ref) {
     const std::string& var_name = ref.name.name;
 
     // Check if variable already has a register assigned
     if (symbols_.exists(var_name)) {
         // Variable exists - return its register
-        return symbols_.getRegister(var_name);
+        return Result<uint16_t, CompilerError>::Ok(symbols_.getRegister(var_name));
     }
 
     // Variable not yet loaded - load from environment
@@ -314,14 +336,18 @@ uint16_t Compiler::compileTensorRef(const TensorRef& ref) {
     addRegisterName(dest_reg, var_name);
 
     // TODO: Handle indexed access
-    return dest_reg;
+    return Result<uint16_t, CompilerError>::Ok(dest_reg);
 }
 
-uint16_t Compiler::compileFunctionCall(const ExprCall& call) {
+Result<uint16_t, CompilerError> Compiler::compileFunctionCall(const ExprCall& call) {
     // Compile function arguments
     std::vector<uint16_t> arg_regs;
     for (const auto& arg : call.args) {
-        arg_regs.push_back(compileExpression(*arg));
+        auto arg_result = compileExpression(*arg);
+        if (arg_result.isErr()) {
+            return Result<uint16_t, CompilerError>::Err(std::move(arg_result.error()));
+        }
+        arg_regs.push_back(arg_result.value());
     }
 
     uint16_t dest_reg = registers_.allocate();
@@ -342,19 +368,30 @@ uint16_t Compiler::compileFunctionCall(const ExprCall& call) {
     } else if (func_name == "step" || func_name == "H") {
         emit(OpCode::STEP, dest_reg, arg_regs[0]);
     } else {
-        error("Unknown function: " + func_name);
+        return Result<uint16_t, CompilerError>::Err(
+            makeError(CompilerErrorKind::UnknownFunction, "Unknown function: " + func_name));
     }
 
     // Don't free argument registers (may be variable registers needed later)
 
-    return dest_reg;
+    return Result<uint16_t, CompilerError>::Ok(dest_reg);
 }
 
-uint16_t Compiler::compileArithmetic(ExprBinary::Op op,
+Result<uint16_t, CompilerError> Compiler::compileArithmetic(ExprBinary::Op op,
                                        const Expr& left,
                                        const Expr& right) {
-    uint16_t left_reg = compileExpression(left);
-    uint16_t right_reg = compileExpression(right);
+    auto left_result = compileExpression(left);
+    if (left_result.isErr()) {
+        return Result<uint16_t, CompilerError>::Err(std::move(left_result.error()));
+    }
+    uint16_t left_reg = left_result.value();
+
+    auto right_result = compileExpression(right);
+    if (right_result.isErr()) {
+        return Result<uint16_t, CompilerError>::Err(std::move(right_result.error()));
+    }
+    uint16_t right_reg = right_result.value();
+
     uint16_t dest_reg = registers_.allocate();
 
     switch (op) {
@@ -392,19 +429,24 @@ uint16_t Compiler::compileArithmetic(ExprBinary::Op op,
             emit(OpCode::CMP_NE, dest_reg, left_reg, right_reg);
             break;
         default:
-            error("Unknown binary operator");
-            break;
+            return Result<uint16_t, CompilerError>::Err(
+                makeError(CompilerErrorKind::UnknownOperator, "Unknown binary operator"));
     }
 
     // Note: Don't free left_reg and right_reg here.
     // They may be variable registers that need to stay live for later uses.
     // A proper liveness analysis would determine when registers can be safely freed.
 
-    return dest_reg;
+    return Result<uint16_t, CompilerError>::Ok(dest_reg);
 }
 
-uint16_t Compiler::compileUnary(ExprUnary::Op op, const Expr& expr) {
-    uint16_t operand_reg = compileExpression(expr);
+Result<uint16_t, CompilerError> Compiler::compileUnary(ExprUnary::Op op, const Expr& expr) {
+    auto operand_result = compileExpression(expr);
+    if (operand_result.isErr()) {
+        return Result<uint16_t, CompilerError>::Err(std::move(operand_result.error()));
+    }
+    uint16_t operand_reg = operand_result.value();
+
     uint16_t dest_reg = registers_.allocate();
 
     switch (op) {
@@ -415,45 +457,49 @@ uint16_t Compiler::compileUnary(ExprUnary::Op op, const Expr& expr) {
             emit(OpCode::NEGATE_MASK, dest_reg, operand_reg);
             break;
         default:
-            error("Unknown unary operator");
-            break;
+            return Result<uint16_t, CompilerError>::Err(
+                makeError(CompilerErrorKind::UnknownOperator, "Unknown unary operator"));
     }
 
     // Don't free operand_reg (may be variable register needed later)
-    return dest_reg;
+    return Result<uint16_t, CompilerError>::Ok(dest_reg);
 }
 
 // ============================================================================
 // DATALOG COMPILATION (STUBS FOR NOW)
 // ============================================================================
 
-void Compiler::compileDatalogFact(const DatalogFact& fact) {
+Result<void, CompilerError> Compiler::compileDatalogFact(const DatalogFact& fact) {
     // TODO: Implement Datalog fact compilation
     // For now, we'll delegate to existing VM
     if (options_.verbose) {
         std::cout << "Note: Datalog facts not yet compiled to bytecode" << std::endl;
     }
+    return Result<void, CompilerError>::Ok();
 }
 
-void Compiler::compileDatalogRule(const DatalogRule& rule) {
+Result<void, CompilerError> Compiler::compileDatalogRule(const DatalogRule& rule) {
     // TODO: Implement Datalog rule compilation
     if (options_.verbose) {
         std::cout << "Note: Datalog rules not yet compiled to bytecode" << std::endl;
     }
+    return Result<void, CompilerError>::Ok();
 }
 
-void Compiler::compileQuery(const Query& query) {
+Result<void, CompilerError> Compiler::compileQuery(const Query& query) {
     // TODO: Implement query compilation
     if (options_.verbose) {
         std::cout << "Note: Queries not yet compiled to bytecode" << std::endl;
     }
+    return Result<void, CompilerError>::Ok();
 }
 
-void Compiler::compileFileOperation(const FileOperation& op) {
+Result<void, CompilerError> Compiler::compileFileOperation(const FileOperation& op) {
     // TODO: Implement file operation compilation
     if (options_.verbose) {
         std::cout << "Note: File operations not yet compiled to bytecode" << std::endl;
     }
+    return Result<void, CompilerError>::Ok();
 }
 
 // ============================================================================
@@ -580,17 +626,18 @@ void Compiler::addRegisterName(uint16_t reg, const std::string& name) {
     module_.debug_info.addRegisterName(reg, name);
 }
 
-void Compiler::error(const std::string& message) {
-    last_error_ = message;
-    success_ = false;
+CompilerError Compiler::makeError(CompilerErrorKind kind, const std::string& message) const {
+    ErrorLocation loc(current_filename_,
+                      static_cast<uint32_t>(current_line_),
+                      static_cast<uint32_t>(current_column_));
+
+    CompilerError error(kind, message, loc);
 
     if (options_.verbose) {
-        std::cerr << "Compiler error: " << message << std::endl;
-        if (current_line_ > 0) {
-            std::cerr << "  at " << current_filename_ << ":"
-                      << current_line_ << ":" << current_column_ << std::endl;
-        }
+        std::cerr << error.format() << std::endl;
     }
+
+    return error;
 }
 
 // ============================================================================

@@ -38,7 +38,14 @@ void runFile(const std::string &fileName, const ExecutionOptions& options) {
       // Compile to bytecode
       std::cout << "Compiling to bytecode..." << std::endl;
       tl::Compiler compiler;
-      tl::BytecodeModule module = compiler.compile(prog);
+      auto compile_result = compiler.compile(prog);
+
+      if (compile_result.isErr()) {
+        std::cerr << "Compilation error: " << compile_result.error().format() << std::endl;
+        return;
+      }
+
+      tl::BytecodeModule module = std::move(compile_result.value());
 
       std::cout << "Generated " << module.instructions.size() << " instructions, "
                 << module.constants.size() << " constants" << std::endl;

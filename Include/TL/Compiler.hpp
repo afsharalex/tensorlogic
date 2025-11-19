@@ -6,16 +6,92 @@
 
 #include "TL/AST.hpp"
 #include "TL/Bytecode.hpp"
+#include "TL/Result.hpp"
 #include <map>
 #include <set>
 #include <vector>
 #include <string>
 #include <optional>
+#include <variant>
 
 namespace tl {
 
 // Forward declarations
 class Environment;
+
+// ============================================================================
+// COMPILER ERROR TYPES
+// ============================================================================
+
+/// Error categories for compilation
+enum class CompilerErrorKind {
+    Syntax,              ///< Syntax error (shouldn't happen after parsing)
+    Semantic,            ///< Semantic error (type mismatch, undefined variable, etc.)
+    InvalidExpression,   ///< Invalid expression (unknown type, etc.)
+    InvalidLiteral,      ///< Invalid literal value
+    UnknownFunction,     ///< Unknown function name
+    UnknownOperator,     ///< Unknown binary/unary operator
+    UndefinedLabel,      ///< Undefined jump label
+    UndefinedVariable,   ///< Undefined variable reference
+    Internal,            ///< Internal compiler error
+    NotImplemented       ///< Feature not yet implemented
+};
+
+/// Source location for error reporting
+struct ErrorLocation {
+    std::string filename;
+    uint32_t line = 0;
+    uint32_t column = 0;
+
+    ErrorLocation() = default;
+    ErrorLocation(std::string file, uint32_t ln, uint32_t col)
+        : filename(std::move(file)), line(ln), column(col) {}
+
+    bool hasLocation() const { return line > 0; }
+};
+
+/// Compiler error information
+struct CompilerError {
+    CompilerErrorKind kind;
+    std::string message;
+    ErrorLocation location;
+
+    CompilerError(CompilerErrorKind k, std::string msg)
+        : kind(k), message(std::move(msg)) {}
+
+    CompilerError(CompilerErrorKind k, std::string msg, ErrorLocation loc)
+        : kind(k), message(std::move(msg)), location(std::move(loc)) {}
+
+    /// Format error for display
+    std::string format() const {
+        std::string result;
+
+        // Add error kind
+        switch (kind) {
+            case CompilerErrorKind::Syntax: result = "Syntax error: "; break;
+            case CompilerErrorKind::Semantic: result = "Semantic error: "; break;
+            case CompilerErrorKind::InvalidExpression: result = "Invalid expression: "; break;
+            case CompilerErrorKind::InvalidLiteral: result = "Invalid literal: "; break;
+            case CompilerErrorKind::UnknownFunction: result = "Unknown function: "; break;
+            case CompilerErrorKind::UnknownOperator: result = "Unknown operator: "; break;
+            case CompilerErrorKind::UndefinedLabel: result = "Undefined label: "; break;
+            case CompilerErrorKind::UndefinedVariable: result = "Undefined variable: "; break;
+            case CompilerErrorKind::Internal: result = "Internal compiler error: "; break;
+            case CompilerErrorKind::NotImplemented: result = "Not implemented: "; break;
+        }
+
+        result += message;
+
+        // Add location if available
+        if (location.hasLocation()) {
+            result += "\n  at " + location.filename + ":" +
+                      std::to_string(location.line) + ":" +
+                      std::to_string(location.column);
+        }
+
+        return result;
+    }
+};
 
 // ============================================================================
 // COMPILER OPTIONS
@@ -117,14 +193,11 @@ public:
     explicit Compiler(const CompilerOptions& opts = CompilerOptions());
 
     /// Compile a program to bytecode
-    BytecodeModule compile(const Program& program);
+    Result<BytecodeModule, CompilerError> compile(const Program& program);
 
     /// Get/set options
     void setOptions(const CompilerOptions& opts) { options_ = opts; }
     const CompilerOptions& getOptions() const { return options_; }
-
-    /// Get last error message
-    const std::string& getLastError() const { return last_error_; }
 
 private:
     // ========================================================================
@@ -145,47 +218,47 @@ private:
     // ========================================================================
 
     /// Generate bytecode for a statement
-    void compileStatement(const Statement& stmt);
+    Result<void, CompilerError> compileStatement(const Statement& stmt);
 
     /// Compile a tensor equation
-    void compileEquation(const TensorEquation& eq);
+    Result<void, CompilerError> compileEquation(const TensorEquation& eq);
 
     /// Compile expression and return register containing result
-    uint16_t compileExpression(const Expr& expr);
+    Result<uint16_t, CompilerError> compileExpression(const Expr& expr);
 
     /// Compile a Datalog fact
-    void compileDatalogFact(const DatalogFact& fact);
+    Result<void, CompilerError> compileDatalogFact(const DatalogFact& fact);
 
     /// Compile a Datalog rule
-    void compileDatalogRule(const DatalogRule& rule);
+    Result<void, CompilerError> compileDatalogRule(const DatalogRule& rule);
 
     /// Compile a query
-    void compileQuery(const Query& query);
+    Result<void, CompilerError> compileQuery(const Query& query);
 
     /// Compile a file operation
-    void compileFileOperation(const FileOperation& op);
+    Result<void, CompilerError> compileFileOperation(const FileOperation& op);
 
     // ========================================================================
     // EXPRESSION COMPILATION
     // ========================================================================
 
     /// Compile arithmetic expression (add, sub, mul, div, pow)
-    uint16_t compileArithmetic(ExprBinary::Op op, const Expr& left, const Expr& right);
+    Result<uint16_t, CompilerError> compileArithmetic(ExprBinary::Op op, const Expr& left, const Expr& right);
 
     /// Compile unary expression (negation)
-    uint16_t compileUnary(ExprUnary::Op op, const Expr& expr);
+    Result<uint16_t, CompilerError> compileUnary(ExprUnary::Op op, const Expr& expr);
 
     /// Compile function call (activations, etc.)
-    uint16_t compileFunctionCall(const ExprCall& call);
+    Result<uint16_t, CompilerError> compileFunctionCall(const ExprCall& call);
 
     /// Compile tensor reference (variable lookup or indexed access)
-    uint16_t compileTensorRef(const TensorRef& ref);
+    Result<uint16_t, CompilerError> compileTensorRef(const TensorRef& ref);
 
     /// Compile number literal
-    uint16_t compileNumberLiteral(const NumberLiteral& lit);
+    Result<uint16_t, CompilerError> compileNumberLiteral(const NumberLiteral& lit);
 
     /// Compile list literal (array)
-    uint16_t compileListLiteral(const ExprList& lit);
+    Result<uint16_t, CompilerError> compileListLiteral(const ExprList& lit);
 
     // ========================================================================
     // INDEX COMPILATION
@@ -279,8 +352,8 @@ private:
     /// Get current PC
     uint32_t getCurrentPC() const { return module_.getCurrentPC(); }
 
-    /// Report error
-    void error(const std::string& message);
+    /// Create error with current location
+    CompilerError makeError(CompilerErrorKind kind, const std::string& message) const;
 
     // ========================================================================
     // STATE
@@ -302,12 +375,6 @@ private:
 
     /// Constant value tracking (for constant folding)
     std::map<uint16_t, Constant> register_constants_;
-
-    /// Last error message
-    std::string last_error_;
-
-    /// Compilation succeeded
-    bool success_ = true;
 };
 
 // ============================================================================

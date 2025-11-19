@@ -29,7 +29,9 @@ TEST_CASE("Bytecode: Simple constant loading", "[bytecode]") {
 
     // Compile to bytecode
     Compiler compiler;
-    BytecodeModule module = compiler.compile(program);
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
 
     // Verify compilation succeeded
     REQUIRE(module.instructions.size() > 0);
@@ -65,7 +67,9 @@ TEST_CASE("Bytecode: Arithmetic operations", "[bytecode]") {
     auto program = parseProgram(source);
 
     Compiler compiler;
-    BytecodeModule module = compiler.compile(program);
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
 
     auto backend = createBackend();
     Environment env;
@@ -105,7 +109,9 @@ TEST_CASE("Bytecode: Activation functions", "[bytecode]") {
     auto program = parseProgram(source);
 
     Compiler compiler;
-    BytecodeModule module = compiler.compile(program);
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
 
     auto backend = createBackend();
     Environment env;
@@ -140,7 +146,9 @@ TEST_CASE("Bytecode: Unary negation", "[bytecode]") {
     auto program = parseProgram(source);
 
     Compiler compiler;
-    BytecodeModule module = compiler.compile(program);
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
 
     auto backend = createBackend();
     Environment env;
@@ -167,7 +175,9 @@ TEST_CASE("Bytecode: Power operation", "[bytecode]") {
     auto program = parseProgram(source);
 
     Compiler compiler;
-    BytecodeModule module = compiler.compile(program);
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
 
     auto backend = createBackend();
     Environment env;
@@ -196,7 +206,9 @@ TEST_CASE("Bytecode: Comparison operations", "[bytecode]") {
     auto program = parseProgram(source);
 
     Compiler compiler;
-    BytecodeModule module = compiler.compile(program);
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
 
     auto backend = createBackend();
     Environment env;
@@ -236,7 +248,9 @@ TEST_CASE("Bytecode: Complex expression", "[bytecode]") {
     auto program = parseProgram(source);
 
     Compiler compiler;
-    BytecodeModule module = compiler.compile(program);
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
 
     auto backend = createBackend();
     Environment env;
@@ -263,7 +277,9 @@ TEST_CASE("Bytecode: Reductions", "[bytecode]") {
     auto program = parseProgram(source);
 
     Compiler compiler;
-    BytecodeModule module = compiler.compile(program);
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
 
     auto backend = createBackend();
     Environment env;
@@ -292,7 +308,9 @@ TEST_CASE("Bytecode: Variable dependencies", "[bytecode]") {
     auto program = parseProgram(source);
 
     Compiler compiler;
-    BytecodeModule module = compiler.compile(program);
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
 
     auto backend = createBackend();
     Environment env;
@@ -337,7 +355,9 @@ TEST_CASE("Bytecode: Constant pool deduplication", "[bytecode]") {
     auto program = parseProgram(source);
 
     Compiler compiler;
-    BytecodeModule module = compiler.compile(program);
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
 
     // The same constant [1, 2, 3] should be deduplicated
     // Note: Current implementation may not deduplicate tensor constants
@@ -354,7 +374,9 @@ TEST_CASE("Bytecode: Disassembly output", "[bytecode]") {
     auto program = parseProgram(source);
 
     Compiler compiler;
-    BytecodeModule module = compiler.compile(program);
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
 
     // Test disassembly
     std::string disasm = disassembleModule(module);
@@ -385,7 +407,9 @@ TEST_CASE("Bytecode: Debug mode execution", "[bytecode]") {
     auto program = parseProgram(source);
 
     Compiler compiler;
-    BytecodeModule module = compiler.compile(program);
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
 
     auto backend = createBackend();
     Environment env;
