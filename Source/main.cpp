@@ -1,7 +1,7 @@
 #include "TL/AST.hpp"
 #include "TL/Parser.hpp"
 #include "TL/backend.hpp"
-#include "TL/vm.hpp"
+#include "TL/VM.hpp"
 #include <iostream>
 #include <optional>
 #include <torch/torch.h>

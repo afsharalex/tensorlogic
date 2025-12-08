@@ -1,7 +1,7 @@
 #include "TL/Runtime/Executors/NormalizationExecutor.hpp"
 #include "TL/Runtime/Executors/ExpressionExecutor.hpp"
 #include "TL/Runtime/ExecutorUtils.hpp"
-#include "TL/vm.hpp"
+#include "TL/VM.hpp"
 #include <torch/torch.h>
 
 namespace tl {

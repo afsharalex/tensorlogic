@@ -1,5 +1,5 @@
 #include "TL/Runtime/LearningEngine.hpp"
-#include "TL/vm.hpp"
+#include "TL/VM.hpp"
 #include "TL/backend.hpp"
 #include "TL/Runtime/ExecutorRegistry.hpp"
 #include "TL/Runtime/Executors/ScalarAssignExecutor.hpp"

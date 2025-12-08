@@ -31,6 +31,19 @@ namespace tl {
          */
         Tensor evalExpr(const ExprPtr& ep, const TensorRef& lhsCtx,
                        Environment& env, TensorBackend& backend) const;
+
+    private:
+        /**
+         * @brief Attempt to optimize multiplication with einsum
+         * @return Optimized tensor result if successful, std::nullopt if optimization not applicable
+         */
+        std::optional<Tensor> tryEinsumOptimization(
+            const ExprBinary* bin,
+            const TensorRef& lhsCtx,
+            const Tensor& a,
+            const Tensor& b,
+            Environment& env,
+            TensorBackend& backend) const;
     };
 
 } // namespace tl

@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include "TL/Parser.hpp"
-#include "TL/vm.hpp"
+#include "TL/VM.hpp"
 #include <string>
 #include <sstream>
 

@@ -1,4 +1,5 @@
-#include "TL/vm.hpp"
+#include "TL/VM.hpp"
+#include "TL/VMConfig.hpp"
 #include "TL/Runtime/Executors/ScalarAssignExecutor.hpp"
 #include "TL/Runtime/Executors/ListLiteralExecutor.hpp"
 #include "TL/Runtime/Executors/EinsumExecutor.hpp"
@@ -23,8 +24,6 @@
 #include <algorithm>
 
 namespace tl {
-
-// -------- Environment --------
 
 void Environment::bind(const std::string &name, const Tensor &t) {
   tensors_[name] = t;
@@ -102,13 +101,11 @@ bool Environment::hasRelation(const std::string &relation) const {
 }
 
 const std::vector<std::vector<std::string>> &Environment::facts(const std::string &relation) const {
-  static const std::vector<std::vector<std::string>> kEmpty;
+  static const std::vector<std::vector<std::string>> EMPTY_RELATION;
   auto it = datalog_.find(relation);
-  if (it == datalog_.end()) return kEmpty;
+  if (it == datalog_.end()) return EMPTY_RELATION;
   return it->second;
 }
-
-// -------- BackendRouter --------
 
 BackendType BackendRouter::analyze(const Statement &st) {
   // Phase 1: Tensor equations go to LibTorch. Others ignored for now.
@@ -117,8 +114,6 @@ BackendType BackendRouter::analyze(const Statement &st) {
   }
   return BackendType::LibTorch; // default
 }
-
-// -------- TensorLogicVM --------
 
 TensorLogicVM::TensorLogicVM(std::ostream* out, std::ostream* err)
   : output_stream_(out), error_stream_(err), datalog_engine_(env_, out) {
@@ -187,299 +182,19 @@ void TensorLogicVM::execute(const Program &program) {
     debugLog("Total statements: " + std::to_string(program.statements.size()));
   }
 
-  // BATCH PREPROCESSING: Collect virtual-indexed statements for batch processing
-  std::vector<Statement> virtualIndexedStmts;
-  std::vector<size_t> virtualIndexedIndices;
-  std::vector<Statement> processedStatements;
-  std::vector<size_t> processedIndices;
-
-  // First pass: identify virtual-indexed statements
-  for (size_t i = 0; i < program.statements.size(); ++i) {
-    const auto &st = program.statements[i];
-
-    bool isVirtualIndexed = false;
-    if (std::holds_alternative<TensorEquation>(st)) {
-      const auto& eq = std::get<TensorEquation>(st);
-
-      // Check LHS for virtual indices
-      for (const auto& ios : eq.lhs.indices) {
-        // Check if it's an Index (not a Slice), then check if it's a VirtualIndex
-        if (std::holds_alternative<Index>(ios.value)) {
-          const auto& idx = std::get<Index>(ios.value);
-          if (std::holds_alternative<VirtualIndex>(idx.value)) {
-            isVirtualIndexed = true;
-            break;
-          }
-        }
-      }
-
-      // IMPORTANT: RHS-only virtual indices should NOT be batched
-      // They are handled by single-statement preprocessing which substitutes them with 0
-      // Only batch equations that have virtual indices on BOTH LHS and RHS (recurrent equations)
-      // Examples:
-      //   - State[i, *t+1] = W[i,j] State[j, *t] + Input[i, t]  -> BATCH (LHS has *t)
-      //   - Output = sigmoid(W_out[i] State[i, *5])  -> DON'T BATCH (only RHS has *5)
-
-      // Note: We already checked LHS above and found no virtual indices
-      // So this equation will go through normal preprocessing, not batch
-    }
-
-    if (isVirtualIndexed) {
-      virtualIndexedStmts.push_back(st);
-      virtualIndexedIndices.push_back(i);
-    } else {
-      processedStatements.push_back(st);
-      processedIndices.push_back(i);
-    }
-  }
+  // Partition statements into virtual-indexed and non-virtual
+  StatementPartition partition = partitionStatements(program);
 
   // IMPORTANT: Execute non-virtual statements first so tensors are defined
   // This allows getIterationCount to find driving tensors like Input
-  if (debug_) {
-    debugLog("Executing " + std::to_string(processedStatements.size()) + " non-virtual statements first");
-  }
-
-  for (size_t i = 0; i < processedStatements.size(); ++i) {
-    const auto &st = processedStatements[i];
-    if (debug_) {
-      debugLog("Non-virtual stmt " + std::to_string(i) + ": " + toString(st));
-    }
-
-    // FIRST: Preprocess statement (for non-virtual preprocessors)
-    auto preprocessed = preprocessor_registry_.preprocess(st, env_);
-
-    // THEN: Execute each preprocessed statement
-    for (const auto &preprocessed_st : preprocessed) {
-      const BackendType be = router_.analyze(preprocessed_st);
-      if (debug_ && preprocessed.size() > 1) {
-        debugLog("  Preprocessed: " + toString(preprocessed_st));
-      }
-
-      if (std::holds_alternative<TensorEquation>(preprocessed_st)) {
-        execTensorEquation(std::get<TensorEquation>(preprocessed_st));
-      } else if (std::holds_alternative<FixedPointLoop>(preprocessed_st)) {
-        executeFixedPointLoop(std::get<FixedPointLoop>(preprocessed_st));
-      } else if (std::holds_alternative<DatalogFact>(preprocessed_st)) {
-        datalog_engine_.addFact(std::get<DatalogFact>(preprocessed_st));
-      } else if (std::holds_alternative<DatalogRule>(preprocessed_st)) {
-        datalog_engine_.addRule(std::get<DatalogRule>(preprocessed_st));
-      } else if (std::holds_alternative<FileOperation>(preprocessed_st)) {
-        const auto &fo = std::get<FileOperation>(preprocessed_st);
-        auto resolvePath = [](const std::string &p)->std::filesystem::path {
-        std::filesystem::path path(p);
-        if (path.is_absolute()) return path;
-        // Try as-is relative to CWD
-        const std::filesystem::path cwd = std::filesystem::current_path();
-        std::filesystem::path candidate = cwd / path;
-        if (std::filesystem::exists(candidate)) return candidate;
-        // TODO: Should we throw here?
-        // Fall back to as-is
-        return candidate;
-      };
-
-      auto readTensorFromFile = [&](const std::string &p)->Tensor {
-        const std::filesystem::path rp = resolvePath(p);
-        std::ifstream ifs(rp);
-        if (!ifs) throw std::runtime_error("Cannot open file for reading: " + rp.string());
-        std::vector<std::string> lines;
-        std::string line;
-        while (std::getline(ifs, line)) {
-          // Trim CR and whitespace at both ends
-          while (!line.empty() && (line.back()=='\r' || line.back()=='\n' || line.back()==' ' || line.back()=='\t')) line.pop_back();
-          size_t start = 0; while (start < line.size() && (line[start]==' ' || line[start]=='\t')) ++start;
-          if (start > 0) line = line.substr(start);
-          if (line.empty()) continue;
-          lines.push_back(line);
-        }
-        if (lines.empty()) {
-          return torch::zeros({0});
-        }
-        bool hasComma = false;
-        for (const auto &ln : lines) { if (ln.find(',') != std::string::npos) { hasComma = true; break; } }
-        if (hasComma) {
-          // Parse as 2D CSV
-          std::vector<float> values;
-          size_t cols = 0;
-          for (const auto &ln : lines) {
-            std::vector<float> row;
-            size_t pos = 0;
-            while (pos <= ln.size()) {
-              size_t comma = ln.find(',', pos);
-              const std::string tok = (comma == std::string::npos) ? ln.substr(pos) : ln.substr(pos, comma - pos);
-              if (!tok.empty()) {
-                row.push_back(static_cast<float>(std::stod(tok)));
-              } else {
-                row.push_back(0.0f);
-              }
-              if (comma == std::string::npos) break;
-              pos = comma + 1;
-            }
-            if (cols == 0) cols = row.size();
-            if (row.size() != cols) throw std::runtime_error("CSV has inconsistent number of columns in: " + rp.string());
-            values.insert(values.end(), row.begin(), row.end());
-          }
-          const int64_t rows = static_cast<int64_t>(lines.size());
-          const int64_t c = static_cast<int64_t>(cols);
-          torch::Tensor t = torch::from_blob(values.data(), {rows, c}, torch::TensorOptions().dtype(torch::kFloat32)).clone();
-          return t;
-        } else {
-          // Treat as 1D: one number per non-empty line
-          std::vector<float> values;
-          values.reserve(lines.size());
-          for (const auto &ln : lines) {
-            values.push_back(static_cast<float>(std::stod(ln)));
-          }
-          const int64_t n = static_cast<int64_t>(values.size());
-          torch::Tensor t = torch::from_blob(values.data(), {n}, torch::TensorOptions().dtype(torch::kFloat32)).clone();
-          return t;
-        }
-      };
-
-      auto writeTensorToFile = [&](const std::string &p, const Tensor &t) {
-        std::filesystem::path rp = resolvePath(p);
-        // Ensure directory exists
-        std::filesystem::path parent = rp.parent_path();
-        if (!parent.empty()) {
-          std::error_code ec; std::filesystem::create_directories(parent, ec);
-        }
-        std::ofstream ofs(rp);
-        if (!ofs) throw std::runtime_error("Cannot open file for writing: " + rp.string());
-        const torch::Tensor contig = t.contiguous();
-        if (contig.dim() == 0) {
-          double v = 0.0; try { v = contig.item<double>(); } catch (...) { v = contig.item<float>(); }
-          ofs << v << "\n";
-          return;
-        }
-        if (contig.dim() == 1) {
-          const int64_t n = contig.size(0);
-          for (int64_t i = 0; i < n; ++i) {
-            double v = 0.0; try { v = contig[i].item<double>(); } catch (...) { v = contig[i].item<float>(); }
-            ofs << v;
-            if (i + 1 < n) ofs << "\n";
-          }
-          return;
-        }
-        if (contig.dim() == 2) {
-          const int64_t r = contig.size(0);
-          const int64_t c = contig.size(1);
-          for (int64_t i = 0; i < r; ++i) {
-            for (int64_t j = 0; j < c; ++j) {
-              double v = 0.0; try { v = contig[i][j].item<double>(); } catch (...) { v = contig[i][j].item<float>(); }
-              if (j) ofs << ",";
-              ofs << v;
-            }
-            if (i + 1 < r) ofs << "\n";
-          }
-          return;
-        }
-        // Higher dimensions: write flattened, one value per line
-        const int64_t n = contig.numel();
-        torch::Tensor flat = contig.reshape({n});
-        for (int64_t i = 0; i < n; ++i) {
-          double v = 0.0; try { v = flat[i].item<double>(); } catch (...) { v = flat[i].item<float>(); }
-          ofs << v;
-          if (i + 1 < n) ofs << "\n";
-        }
-      };
-
-      if (fo.lhsIsTensor) {
-        Tensor t = readTensorFromFile(fo.file.text);
-        env_.bind(fo.tensor, t);
-        if (debug_) {
-          std::ostringstream oss; oss << "Loaded tensor from '" << fo.file.text << "' into " << Environment::key(fo.tensor) << " shape=" << t.sizes();
-          debugLog(oss.str());
-        }
-      } else {
-        const auto &src = env_.lookup(fo.tensor);
-        writeTensorToFile(fo.file.text, src);
-        if (debug_) {
-          std::ostringstream oss; oss << "Wrote tensor " << Environment::key(fo.tensor) << " shape=" << src.sizes() << " to '" << fo.file.text << "'";
-            debugLog(oss.str());
-          }
-        }
-      } else if (std::holds_alternative<Query>(preprocessed_st)) {
-        // Queries are processed in a separate loop after saturation (see line ~459)
-        // Do nothing here - not an error
-      } else {
-        // Unknown statement kind
-        if (debug_) debugLog("Warning: Unknown statement type, skipping");
-      }
-    } // end for each preprocessed statement
-  } // end for each non-virtual statement
+  executeNonVirtualStatements(partition.nonVirtual);
 
   // NOW batch preprocess and execute virtual-indexed statements
   // At this point, tensors like Input should be defined
-  if (!virtualIndexedStmts.empty()) {
-    if (debug_) {
-      debugLog("Batch preprocessing " + std::to_string(virtualIndexedStmts.size()) + " virtual-indexed statements");
-    }
-    std::vector<Statement> expandedVirtual = VirtualIndexPreprocessor::preprocessBatch(virtualIndexedStmts, env_);
-
-    if (debug_) {
-      debugLog("Executing " + std::to_string(expandedVirtual.size()) + " expanded virtual statements");
-    }
-
-    for (size_t i = 0; i < expandedVirtual.size(); ++i) {
-      const auto &st = expandedVirtual[i];
-
-      if (std::holds_alternative<TensorEquation>(st)) {
-        const auto& eq = std::get<TensorEquation>(st);
-        if (debug_) {
-          std::ostringstream oss;
-          oss << "Virtual stmt " << i << ": " << Environment::key(eq.lhs) << " = ...";
-
-          // Show LHS tensor shape if it exists
-          std::string lhsName = Environment::key(eq.lhs);
-          if (env_.has(lhsName)) {
-            oss << " (existing shape: " << env_.lookup(lhsName).sizes() << ")";
-          } else {
-            oss << " (new tensor)";
-          }
-          debugLog(oss.str());
-        }
-
-        try {
-          execTensorEquation(eq);
-        } catch (const std::exception& e) {
-          if (debug_) {
-            debugLog("ERROR executing virtual stmt " + std::to_string(i));
-            debugLog("  LHS: " + Environment::key(eq.lhs));
-            debugLog("  Error: " + std::string(e.what()));
-          }
-          throw;
-        }
-      } else if (std::holds_alternative<FixedPointLoop>(st)) {
-        const auto& loop = std::get<FixedPointLoop>(st);
-        if (debug_) {
-          debugLog("Virtual stmt " + std::to_string(i) + ": FixedPointLoop for " + loop.monitoredTensor);
-        }
-        try {
-          executeFixedPointLoop(loop);
-        } catch (const std::exception& e) {
-          if (debug_) {
-            debugLog("ERROR executing fixed-point loop " + std::to_string(i));
-            debugLog("  Monitored tensor: " + loop.monitoredTensor);
-            debugLog("  Error: " + std::string(e.what()));
-          }
-          throw;
-        }
-      } else if (std::holds_alternative<Query>(st)) {
-        // Ensure closure is up-to-date before answering queries
-        datalog_engine_.saturate();
-        execQuery(std::get<Query>(st));
-      }
-    }
-  }
+  executeVirtualIndexedStatements(partition.virtualIndexed);
 
   // Finally, execute any remaining queries that weren't virtual-indexed
-  for (size_t i = 0; i < program.statements.size(); ++i) {
-    const auto &st = program.statements[i];
-    if (std::holds_alternative<Query>(st)) {
-      // Ensure closure is up-to-date before answering queries
-      datalog_engine_.saturate();
-      execQuery(std::get<Query>(st));
-    }
-  }
+  processRemainingQueries(program);
 }
 
 // Resolve indices to concrete integer positions using either numeric indices
@@ -519,7 +234,7 @@ static bool resolveConcreteIndices(const TensorRef& ref,
   return true;
 }
 
-void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
+void TensorLogicVM::executeTensorEquation(const TensorEquation &eq) {
   // New refactored version using ExecutorRegistry
   try {
     std::string lhsName = Environment::key(eq.lhs);
@@ -779,9 +494,9 @@ TensorEquation TensorLogicVM::substituteVirtualIndex(const TensorEquation &eq, i
 }
 
 void TensorLogicVM::executeFixedPointLoop(const FixedPointLoop &loop) {
-  constexpr int ABSOLUTE_MAX = ABSOLUTE_MAX_ITERS;  // 10000
-  constexpr int MAX_STABLE = MAX_CONSECUTIVE_STABLE;  // 10
-  constexpr float TOLERANCE = CONVERGENCE_TOLERANCE;  // 0.0001f
+  using VMConfig::ABSOLUTE_MAX_ITERS;
+  using VMConfig::MAX_CONSECUTIVE_STABLE;
+  using VMConfig::CONVERGENCE_TOLERANCE;
 
   int consecutiveStableCount = 0;
   int totalIterations = 0;
@@ -790,12 +505,12 @@ void TensorLogicVM::executeFixedPointLoop(const FixedPointLoop &loop) {
   if (debug_) {
     std::ostringstream oss;
     oss << "Fixed-point loop for " << loop.monitoredTensor
-        << " (tolerance=" << TOLERANCE
-        << ", maxStable=" << MAX_STABLE << ")";
+        << " (tolerance=" << CONVERGENCE_TOLERANCE
+        << ", maxStable=" << MAX_CONSECUTIVE_STABLE << ")";
     debugLog(oss.str());
   }
 
-  while (totalIterations < ABSOLUTE_MAX) {
+  while (totalIterations < ABSOLUTE_MAX_ITERS) {
     // Save previous state (after first iteration)
     if (totalIterations > 0 && env_.has(loop.monitoredTensor)) {
       prevState = env_.lookup(loop.monitoredTensor).clone();
@@ -803,7 +518,7 @@ void TensorLogicVM::executeFixedPointLoop(const FixedPointLoop &loop) {
 
     // Execute one iteration by substituting virtual index with concrete timestep
     TensorEquation expandedEq = substituteVirtualIndex(loop.equation, totalIterations);
-    execTensorEquation(expandedEq);
+    executeTensorEquation(expandedEq);
 
     totalIterations++;
 
@@ -814,11 +529,11 @@ void TensorLogicVM::executeFixedPointLoop(const FixedPointLoop &loop) {
       // Compute maximum absolute change across all elements
       float maxChange = (currentState - prevState).abs().max().item<float>();
 
-      if (maxChange <= TOLERANCE) {
+      if (maxChange <= CONVERGENCE_TOLERANCE) {
         // Value is stable - increment counter
         consecutiveStableCount++;
 
-        if (consecutiveStableCount >= MAX_STABLE) {
+        if (consecutiveStableCount >= MAX_CONSECUTIVE_STABLE) {
           // Converged! Exit loop
           if (debug_) {
             std::ostringstream oss;
@@ -838,13 +553,13 @@ void TensorLogicVM::executeFixedPointLoop(const FixedPointLoop &loop) {
   // Hit absolute maximum without convergence
   if (debug_) {
     std::ostringstream oss;
-    oss << "  Hit max iterations (" << ABSOLUTE_MAX
+    oss << "  Hit max iterations (" << ABSOLUTE_MAX_ITERS
         << ") without convergence";
     debugLog(oss.str());
   }
 }
 
-void TensorLogicVM::execQuery(const Query &q) {
+void TensorLogicVM::executeQuery(const Query &q) {
   using torch::indexing::TensorIndex;
 
   // Handle learning directives
@@ -940,6 +655,303 @@ void TensorLogicVM::execQuery(const Query &q) {
 
   // Handle Datalog queries - delegate to DatalogEngine
   datalog_engine_.query(q, *output_stream_);
+}
+
+std::filesystem::path TensorLogicVM::resolvePath(const std::string &p) {
+  std::filesystem::path path(p);
+  if (path.is_absolute()) return path;
+  // Try as-is relative to CWD
+  const std::filesystem::path cwd = std::filesystem::current_path();
+  std::filesystem::path candidate = cwd / path;
+  if (std::filesystem::exists(candidate)) return candidate;
+  // File doesn't exist relative to CWD - return candidate path anyway.
+  // For reads: will throw when opening fails.
+  // For writes: file will be created (no error needed).
+  return candidate;
+}
+
+Tensor TensorLogicVM::readTensorFromFile(const std::string &p) {
+  const std::filesystem::path rp = resolvePath(p);
+  std::ifstream ifs(rp);
+  if (!ifs) throw std::runtime_error("Cannot open file for reading: " + rp.string());
+  std::vector<std::string> lines;
+  std::string line;
+  while (std::getline(ifs, line)) {
+    // Trim CR and whitespace at both ends
+    while (!line.empty() && (line.back()=='\r' || line.back()=='\n' || line.back()==' ' || line.back()=='\t')) line.pop_back();
+    size_t start = 0; while (start < line.size() && (line[start]==' ' || line[start]=='\t')) ++start;
+    if (start > 0) line = line.substr(start);
+    if (line.empty()) continue;
+    lines.push_back(line);
+  }
+  if (lines.empty()) {
+    return torch::zeros({0});
+  }
+  bool hasComma = false;
+  for (const auto &ln : lines) { if (ln.find(',') != std::string::npos) { hasComma = true; break; } }
+  if (hasComma) {
+    // Parse as 2D CSV
+    std::vector<float> values;
+    size_t cols = 0;
+    for (const auto &ln : lines) {
+      std::vector<float> row;
+      size_t pos = 0;
+      while (pos <= ln.size()) {
+        size_t comma = ln.find(',', pos);
+        const std::string tok = (comma == std::string::npos) ? ln.substr(pos) : ln.substr(pos, comma - pos);
+        if (!tok.empty()) {
+          row.push_back(static_cast<float>(std::stod(tok)));
+        } else {
+          row.push_back(0.0f);
+        }
+        if (comma == std::string::npos) break;
+        pos = comma + 1;
+      }
+      if (cols == 0) cols = row.size();
+      if (row.size() != cols) throw std::runtime_error("CSV has inconsistent number of columns in: " + rp.string());
+      values.insert(values.end(), row.begin(), row.end());
+    }
+    const int64_t rows = static_cast<int64_t>(lines.size());
+    const int64_t c = static_cast<int64_t>(cols);
+    torch::Tensor t = torch::from_blob(values.data(), {rows, c}, torch::TensorOptions().dtype(torch::kFloat32)).clone();
+    return t;
+  } else {
+    // Treat as 1D: one number per non-empty line
+    std::vector<float> values;
+    values.reserve(lines.size());
+    for (const auto &ln : lines) {
+      values.push_back(static_cast<float>(std::stod(ln)));
+    }
+    const int64_t n = static_cast<int64_t>(values.size());
+    torch::Tensor t = torch::from_blob(values.data(), {n}, torch::TensorOptions().dtype(torch::kFloat32)).clone();
+    return t;
+  }
+}
+
+void TensorLogicVM::writeTensorToFile(const std::string &p, const Tensor &t) {
+  std::filesystem::path rp = resolvePath(p);
+  // Ensure directory exists
+  std::filesystem::path parent = rp.parent_path();
+  if (!parent.empty()) {
+    std::error_code ec; std::filesystem::create_directories(parent, ec);
+  }
+  std::ofstream ofs(rp);
+  if (!ofs) throw std::runtime_error("Cannot open file for writing: " + rp.string());
+  const torch::Tensor contig = t.contiguous();
+  if (contig.dim() == 0) {
+    double v = 0.0; try { v = contig.item<double>(); } catch (...) { v = contig.item<float>(); }
+    ofs << v << "\n";
+    return;
+  }
+  if (contig.dim() == 1) {
+    const int64_t n = contig.size(0);
+    for (int64_t i = 0; i < n; ++i) {
+      double v = 0.0; try { v = contig[i].item<double>(); } catch (...) { v = contig[i].item<float>(); }
+      ofs << v;
+      if (i + 1 < n) ofs << "\n";
+    }
+    return;
+  }
+  if (contig.dim() == 2) {
+    const int64_t r = contig.size(0);
+    const int64_t c = contig.size(1);
+    for (int64_t i = 0; i < r; ++i) {
+      for (int64_t j = 0; j < c; ++j) {
+        double v = 0.0; try { v = contig[i][j].item<double>(); } catch (...) { v = contig[i][j].item<float>(); }
+        if (j) ofs << ",";
+        ofs << v;
+      }
+      if (i + 1 < r) ofs << "\n";
+    }
+    return;
+  }
+  // Higher dimensions: write flattened, one value per line
+  const int64_t n = contig.numel();
+  torch::Tensor flat = contig.reshape({n});
+  for (int64_t i = 0; i < n; ++i) {
+    double v = 0.0; try { v = flat[i].item<double>(); } catch (...) { v = flat[i].item<float>(); }
+    ofs << v;
+    if (i + 1 < n) ofs << "\n";
+  }
+}
+
+void TensorLogicVM::executeFileOperation(const FileOperation& fo) {
+  if (fo.lhsIsTensor) {
+    Tensor t = readTensorFromFile(fo.file.text);
+    env_.bind(fo.tensor, t);
+    if (debug_) {
+      std::ostringstream oss; oss << "Loaded tensor from '" << fo.file.text << "' into " << Environment::key(fo.tensor) << " shape=" << t.sizes();
+      debugLog(oss.str());
+    }
+  } else {
+    const auto &src = env_.lookup(fo.tensor);
+    writeTensorToFile(fo.file.text, src);
+    if (debug_) {
+      std::ostringstream oss; oss << "Wrote tensor " << Environment::key(fo.tensor) << " shape=" << src.sizes() << " to '" << fo.file.text << "'";
+      debugLog(oss.str());
+    }
+  }
+}
+
+TensorLogicVM::StatementPartition TensorLogicVM::partitionStatements(const Program& program) {
+  StatementPartition result;
+
+  for (const auto &st : program.statements) {
+    bool isVirtualIndexed = false;
+    if (std::holds_alternative<TensorEquation>(st)) {
+      const auto& eq = std::get<TensorEquation>(st);
+
+      // Check LHS for virtual indices
+      for (const auto& ios : eq.lhs.indices) {
+        // Check if it's an Index (not a Slice), then check if it's a VirtualIndex
+        if (std::holds_alternative<Index>(ios.value)) {
+          const auto& idx = std::get<Index>(ios.value);
+          if (std::holds_alternative<VirtualIndex>(idx.value)) {
+            isVirtualIndexed = true;
+            break;
+          }
+        }
+      }
+
+      // IMPORTANT: RHS-only virtual indices should NOT be batched
+      // They are handled by single-statement preprocessing which substitutes them with 0
+      // Only batch equations that have virtual indices on BOTH LHS and RHS (recurrent equations)
+      // Examples:
+      //   - State[i, *t+1] = W[i,j] State[j, *t] + Input[i, t]  -> BATCH (LHS has *t)
+      //   - Output = sigmoid(W_out[i] State[i, *5])  -> DON'T BATCH (only RHS has *5)
+      //
+      // Note: We already checked LHS above and found no virtual indices
+      // So this equation will go through normal preprocessing, not batch
+    }
+
+    if (isVirtualIndexed) {
+      result.virtualIndexed.push_back(st);
+    } else {
+      result.nonVirtual.push_back(st);
+    }
+  }
+
+  return result;
+}
+
+void TensorLogicVM::dispatchStatement(const Statement& st) {
+  if (std::holds_alternative<TensorEquation>(st)) {
+    executeTensorEquation(std::get<TensorEquation>(st));
+  } else if (std::holds_alternative<FixedPointLoop>(st)) {
+    executeFixedPointLoop(std::get<FixedPointLoop>(st));
+  } else if (std::holds_alternative<DatalogFact>(st)) {
+    datalog_engine_.addFact(std::get<DatalogFact>(st));
+  } else if (std::holds_alternative<DatalogRule>(st)) {
+    datalog_engine_.addRule(std::get<DatalogRule>(st));
+  } else if (std::holds_alternative<FileOperation>(st)) {
+    executeFileOperation(std::get<FileOperation>(st));
+  } else if (std::holds_alternative<Query>(st)) {
+    // Queries are processed in a separate loop after saturation
+    // Do nothing here - not an error
+  } else {
+    // Unknown statement kind
+    if (debug_) debugLog("Warning: Unknown statement type, skipping");
+  }
+}
+
+void TensorLogicVM::executeNonVirtualStatements(const std::vector<Statement>& statements) {
+  if (debug_) {
+    debugLog("Executing " + std::to_string(statements.size()) + " non-virtual statements first");
+  }
+
+  for (size_t i = 0; i < statements.size(); ++i) {
+    const auto &st = statements[i];
+    if (debug_) {
+      debugLog("Non-virtual stmt " + std::to_string(i) + ": " + toString(st));
+    }
+
+    // FIRST: Preprocess statement (for non-virtual preprocessors)
+    auto preprocessed = preprocessor_registry_.preprocess(st, env_);
+
+    // THEN: Execute each preprocessed statement
+    for (const auto &preprocessed_st : preprocessed) {
+      if (debug_ && preprocessed.size() > 1) {
+        debugLog("  Preprocessed: " + toString(preprocessed_st));
+      }
+      dispatchStatement(preprocessed_st);
+    }
+  }
+}
+
+void TensorLogicVM::executeVirtualIndexedStatements(const std::vector<Statement>& statements) {
+  if (statements.empty()) return;
+
+  if (debug_) {
+    debugLog("Batch preprocessing " + std::to_string(statements.size()) + " virtual-indexed statements");
+  }
+  std::vector<Statement> expandedVirtual = VirtualIndexPreprocessor::preprocessBatch(statements, env_);
+
+  if (debug_) {
+    debugLog("Executing " + std::to_string(expandedVirtual.size()) + " expanded virtual statements");
+  }
+
+  for (size_t i = 0; i < expandedVirtual.size(); ++i) {
+    const auto &st = expandedVirtual[i];
+
+    if (std::holds_alternative<TensorEquation>(st)) {
+      const auto& eq = std::get<TensorEquation>(st);
+      if (debug_) {
+        std::ostringstream oss;
+        oss << "Virtual stmt " << i << ": " << Environment::key(eq.lhs) << " = ...";
+
+        // Show LHS tensor shape if it exists
+        std::string lhsName = Environment::key(eq.lhs);
+        if (env_.has(lhsName)) {
+          oss << " (existing shape: " << env_.lookup(lhsName).sizes() << ")";
+        } else {
+          oss << " (new tensor)";
+        }
+        debugLog(oss.str());
+      }
+
+      try {
+        executeTensorEquation(eq);
+      } catch (const std::exception& e) {
+        if (debug_) {
+          debugLog("ERROR executing virtual stmt " + std::to_string(i));
+          debugLog("  LHS: " + Environment::key(eq.lhs));
+          debugLog("  Error: " + std::string(e.what()));
+        }
+        throw;
+      }
+    } else if (std::holds_alternative<FixedPointLoop>(st)) {
+      const auto& loop = std::get<FixedPointLoop>(st);
+      if (debug_) {
+        debugLog("Virtual stmt " + std::to_string(i) + ": FixedPointLoop for " + loop.monitoredTensor);
+      }
+      try {
+        executeFixedPointLoop(loop);
+      } catch (const std::exception& e) {
+        if (debug_) {
+          debugLog("ERROR executing fixed-point loop " + std::to_string(i));
+          debugLog("  Monitored tensor: " + loop.monitoredTensor);
+          debugLog("  Error: " + std::string(e.what()));
+        }
+        throw;
+      }
+    } else if (std::holds_alternative<Query>(st)) {
+      // Ensure closure is up-to-date before answering queries
+      datalog_engine_.saturate();
+      executeQuery(std::get<Query>(st));
+    }
+  }
+}
+
+void TensorLogicVM::processRemainingQueries(const Program& program) {
+  // Finally, execute any remaining queries that weren't virtual-indexed
+  for (size_t i = 0; i < program.statements.size(); ++i) {
+    const auto &st = program.statements[i];
+    if (std::holds_alternative<Query>(st)) {
+      // Ensure closure is up-to-date before answering queries
+      datalog_engine_.saturate();
+      executeQuery(std::get<Query>(st));
+    }
+  }
 }
 
 } // namespace tl

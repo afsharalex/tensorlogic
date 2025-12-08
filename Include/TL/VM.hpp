@@ -13,6 +13,7 @@
 #include <unordered_set>
 #include <vector>
 #include <iostream>
+#include <filesystem>
 
 namespace tl {
 
@@ -82,13 +83,34 @@ public:
   const Environment &env() const { return env_; }
 
 private:
-  void execTensorEquation(const TensorEquation &eq);
-  void execQuery(const Query &q);
+  void executeTensorEquation(const TensorEquation &eq);
+  void executeQuery(const Query &q);
   void executeFixedPointLoop(const FixedPointLoop &loop);
   TensorEquation substituteVirtualIndex(const TensorEquation &eq, int concreteTimeStep);
   void substituteVirtualIndexInExpr(Expr &expr, int concreteTimeStep);
   void initializeExecutors();
   void initializePreprocessors();
+
+  // File I/O operations
+  std::filesystem::path resolvePath(const std::string& path);
+  Tensor readTensorFromFile(const std::string& path);
+  void writeTensorToFile(const std::string& path, const Tensor& tensor);
+  void executeFileOperation(const FileOperation& fileOp);
+
+  // Statement partitioning
+  struct StatementPartition {
+    std::vector<Statement> virtualIndexed;
+    std::vector<Statement> nonVirtual;
+  };
+  StatementPartition partitionStatements(const Program& program);
+
+  // Statement dispatching
+  void dispatchStatement(const Statement& st);
+
+  // Execution loops
+  void executeNonVirtualStatements(const std::vector<Statement>& statements);
+  void executeVirtualIndexedStatements(const std::vector<Statement>& statements);
+  void processRemainingQueries(const Program& program);
 
   void debugLog(const std::string &msg) const;
 

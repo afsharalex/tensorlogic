@@ -1,5 +1,5 @@
 #include "TL/Runtime/Executors/PoolingExecutor.hpp"
-#include "TL/vm.hpp"
+#include "TL/VM.hpp"
 #include <torch/torch.h>
 #include <unordered_map>
 #include <limits>
