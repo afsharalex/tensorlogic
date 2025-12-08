@@ -237,8 +237,24 @@ void BytecodeVM::op_create_range(const Instruction& instr) {
 // ============================================================================
 
 void BytecodeVM::op_einsum(const Instruction& instr) {
-    // TODO: Implement einsum
-    runtimeError("EINSUM not yet implemented");
+    uint16_t dest = instr.operands.reg_imm.reg;
+    uint32_t spec_id = instr.operands.reg_imm.imm;
+
+    // Get einsum specification
+    const EinsumSpec& spec = getEinsumSpec(spec_id);
+
+    // Gather input tensors from registers specified in the spec
+    std::vector<torch::Tensor> inputs;
+    inputs.reserve(spec.input_regs.size());
+    for (uint16_t input_reg : spec.input_regs) {
+        inputs.push_back(getReg(input_reg));
+    }
+
+    // Perform Einstein summation
+    torch::Tensor result = torch::einsum(spec.equation, inputs);
+
+    // Store result in destination register
+    setReg(dest, result);
 }
 
 void BytecodeVM::op_matmul(const Instruction& instr) {

@@ -424,3 +424,139 @@ TEST_CASE("Bytecode: Debug mode execution", "[bytecode]") {
     REQUIRE(output.find("BytecodeVM Execution") != std::string::npos);
     REQUIRE(output.find("Instructions:") != std::string::npos);
 }
+
+TEST_CASE("Bytecode: Einsum matrix multiplication", "[bytecode]") {
+    std::string source = R"(
+        A = [[1.0, 2.0], [3.0, 4.0]]
+        B = [[5.0, 6.0], [7.0, 8.0]]
+        C = einsum("ij,jk->ik", A, B)
+    )";
+
+    auto program = parseProgram(source);
+
+    Compiler compiler;
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
+
+    // Verify einsum spec was added
+    REQUIRE(module.einsum_specs.size() == 1);
+    REQUIRE(module.einsum_specs[0].equation == "ij,jk->ik");
+
+    auto backend = createBackend();
+    Environment env;
+    std::ostringstream out;
+    BytecodeVM vm(*backend, env, &out);
+
+    vm.execute(module);
+
+    // Check result
+    REQUIRE(env.has("C"));
+    auto C = env.lookup("C");
+
+    // C = A @ B = [[1*5+2*7, 1*6+2*8], [3*5+4*7, 3*6+4*8]]
+    //           = [[19, 22], [43, 50]]
+    REQUIRE(C.sizes().size() == 2);
+    REQUIRE(C.size(0) == 2);
+    REQUIRE(C.size(1) == 2);
+
+    REQUIRE_THAT(C.index({0, 0}).item<float>(), Catch::Matchers::WithinRel(19.0f, 0.01f));
+    REQUIRE_THAT(C.index({0, 1}).item<float>(), Catch::Matchers::WithinRel(22.0f, 0.01f));
+    REQUIRE_THAT(C.index({1, 0}).item<float>(), Catch::Matchers::WithinRel(43.0f, 0.01f));
+    REQUIRE_THAT(C.index({1, 1}).item<float>(), Catch::Matchers::WithinRel(50.0f, 0.01f));
+}
+
+TEST_CASE("Bytecode: Einsum outer product", "[bytecode]") {
+    std::string source = R"(
+        A = [1.0, 2.0]
+        B = [3.0, 4.0, 5.0]
+        C = einsum("i,j->ij", A, B)
+    )";
+
+    auto program = parseProgram(source);
+
+    Compiler compiler;
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
+
+    // Verify einsum spec
+    REQUIRE(module.einsum_specs.size() == 1);
+    REQUIRE(module.einsum_specs[0].equation == "i,j->ij");
+
+    auto backend = createBackend();
+    Environment env;
+    std::ostringstream out;
+    BytecodeVM vm(*backend, env, &out);
+
+    vm.execute(module);
+
+    // Check result
+    REQUIRE(env.has("C"));
+    auto C = env.lookup("C");
+
+    // C = outer(A, B) = [[3, 4, 5], [6, 8, 10]]
+    REQUIRE(C.sizes().size() == 2);
+    REQUIRE(C.size(0) == 2);
+    REQUIRE(C.size(1) == 3);
+
+    REQUIRE_THAT(C.index({0, 0}).item<float>(), Catch::Matchers::WithinRel(3.0f, 0.01f));
+    REQUIRE_THAT(C.index({0, 1}).item<float>(), Catch::Matchers::WithinRel(4.0f, 0.01f));
+    REQUIRE_THAT(C.index({0, 2}).item<float>(), Catch::Matchers::WithinRel(5.0f, 0.01f));
+    REQUIRE_THAT(C.index({1, 0}).item<float>(), Catch::Matchers::WithinRel(6.0f, 0.01f));
+    REQUIRE_THAT(C.index({1, 1}).item<float>(), Catch::Matchers::WithinRel(8.0f, 0.01f));
+    REQUIRE_THAT(C.index({1, 2}).item<float>(), Catch::Matchers::WithinRel(10.0f, 0.01f));
+}
+
+TEST_CASE("Bytecode: Einsum trace (sum diagonal)", "[bytecode]") {
+    std::string source = R"(
+        A = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]
+        trace = einsum("ii->", A)
+    )";
+
+    auto program = parseProgram(source);
+
+    Compiler compiler;
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
+
+    auto backend = createBackend();
+    Environment env;
+    std::ostringstream out;
+    BytecodeVM vm(*backend, env, &out);
+
+    vm.execute(module);
+
+    // Check result
+    REQUIRE(env.has("trace"));
+    auto trace = env.lookup("trace");
+
+    // trace = sum of diagonal = 1 + 5 + 9 = 15
+    REQUIRE_THAT(trace.item<float>(), Catch::Matchers::WithinRel(15.0f, 0.01f));
+}
+
+TEST_CASE("Bytecode: Einsum disassembly shows equation", "[bytecode]") {
+    std::string source = R"(
+        A = [[1.0, 2.0], [3.0, 4.0]]
+        B = [[5.0, 6.0], [7.0, 8.0]]
+        C = einsum("ij,jk->ik", A, B)
+    )";
+
+    auto program = parseProgram(source);
+
+    Compiler compiler;
+    auto result = compiler.compile(program);
+    REQUIRE(result.isOk());
+    BytecodeModule module = std::move(result.value());
+
+    // Test disassembly
+    std::string disasm = disassembleModule(module);
+
+    // Should show EINSUM instruction with equation
+    REQUIRE(disasm.find("EINSUM") != std::string::npos);
+    REQUIRE(disasm.find("ij,jk->ik") != std::string::npos);
+
+    // Should show einsum spec in the spec section
+    REQUIRE(disasm.find("Einsum Specifications") != std::string::npos);
+}

@@ -246,6 +246,7 @@ struct Constant {
 /// Einstein summation specification
 struct EinsumSpec {
     std::string equation;           ///< "ij,jk->ik"
+    std::vector<uint16_t> input_regs; ///< Register numbers for input tensors
     std::vector<int> lhs_indices;   ///< Left-hand side indices
     std::vector<int> rhs_indices;   ///< Right-hand side indices
     std::vector<int> output_indices;///< Output indices

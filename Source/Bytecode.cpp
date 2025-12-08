@@ -235,7 +235,6 @@ std::string disassemble(const Instruction& instr, const BytecodeModule* module) 
         case OpCode::ELEMENTWISE_DIV:
         case OpCode::ELEMENTWISE_POW:
         case OpCode::MATMUL:
-        case OpCode::EINSUM:
         case OpCode::APPLY_MASK:
         case OpCode::COMBINE_MASKS_OR:
         case OpCode::COMBINE_MASKS_AND:
@@ -313,6 +312,13 @@ std::string disassemble(const Instruction& instr, const BytecodeModule* module) 
                 ss << "\"" << module->strings[instr.operands.reg_imm.imm] << "\"";
             } else {
                 ss << "#" << instr.operands.reg_imm.imm;
+            }
+            break;
+
+        case OpCode::EINSUM:
+            ss << "r" << instr.operands.reg_imm.reg << ", E" << instr.operands.reg_imm.imm;
+            if (module && instr.operands.reg_imm.imm < module->einsum_specs.size()) {
+                ss << " (\"" << module->einsum_specs[instr.operands.reg_imm.imm].equation << "\")";
             }
             break;
 

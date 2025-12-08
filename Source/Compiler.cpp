@@ -225,6 +225,9 @@ Result<uint16_t, CompilerError> Compiler::compileExpression(const Expr& expr) {
         [this](const ExprNumber& e) -> Result<uint16_t, CompilerError> {
             return compileNumberLiteral(e.literal);
         },
+        [this](const ExprString& e) -> Result<uint16_t, CompilerError> {
+            return compileStringLiteral(e.literal);
+        },
         [this](const ExprList& e) -> Result<uint16_t, CompilerError> {
             return compileListLiteral(e);
         },
@@ -277,12 +280,54 @@ Result<uint16_t, CompilerError> Compiler::compileNumberLiteral(const NumberLiter
     return Result<uint16_t, CompilerError>::Ok(dest_reg);
 }
 
+Result<uint16_t, CompilerError> Compiler::compileStringLiteral(const StringLiteral& lit) {
+    // String literals are stored in the string pool
+    // They don't produce a register value directly - only used as metadata
+    // For now, we'll store them as a string constant
+    Constant c(lit.text);
+    uint16_t dest_reg = registers_.allocate();
+    emitLoadConst(dest_reg, c);
+    return Result<uint16_t, CompilerError>::Ok(dest_reg);
+}
+
 Result<uint16_t, CompilerError> Compiler::compileListLiteral(const ExprList& lit) {
     // Convert list literal to tensor constant
     std::vector<double> values;
+    std::vector<int64_t> shape;
     std::string error_msg;
 
-    // Recursively extract values from nested lists
+    // Helper to determine the shape of nested lists
+    std::function<bool(const ExprPtr&, std::vector<int64_t>&)> inferShape =
+        [&](const ExprPtr& elem, std::vector<int64_t>& current_shape) -> bool {
+        if (std::holds_alternative<ExprNumber>(elem->node)) {
+            // Scalar element
+            return true;
+        } else if (std::holds_alternative<ExprList>(elem->node)) {
+            const auto& nested = std::get<ExprList>(elem->node);
+            if (nested.elements.empty()) {
+                error_msg = "Empty nested list not allowed";
+                return false;
+            }
+            current_shape.push_back(static_cast<int64_t>(nested.elements.size()));
+            // All sublists at this level should have the same shape
+            return inferShape(nested.elements[0], current_shape);
+        }
+        return true;
+    };
+
+    // Infer shape from first element
+    if (lit.elements.empty()) {
+        return Result<uint16_t, CompilerError>::Err(
+            makeError(CompilerErrorKind::InvalidLiteral, "Empty list literal"));
+    }
+
+    shape.push_back(static_cast<int64_t>(lit.elements.size()));
+    if (!inferShape(lit.elements[0], shape)) {
+        return Result<uint16_t, CompilerError>::Err(
+            makeError(CompilerErrorKind::InvalidLiteral, error_msg));
+    }
+
+    // Recursively extract values from nested lists (flattened order)
     std::function<bool(const ExprPtr&)> extractValues = [&](const ExprPtr& elem) -> bool {
         if (std::holds_alternative<ExprNumber>(elem->node)) {
             const auto& num = std::get<ExprNumber>(elem->node);
@@ -310,8 +355,8 @@ Result<uint16_t, CompilerError> Compiler::compileListLiteral(const ExprList& lit
         }
     }
 
-    // Create tensor from values
-    torch::Tensor tensor = torch::tensor(values, torch::kFloat32);
+    // Create tensor from values with proper shape
+    torch::Tensor tensor = torch::tensor(values, torch::kFloat32).reshape(shape);
     Constant c(tensor);
 
     uint16_t dest_reg = registers_.allocate();
@@ -340,7 +385,55 @@ Result<uint16_t, CompilerError> Compiler::compileTensorRef(const TensorRef& ref)
 }
 
 Result<uint16_t, CompilerError> Compiler::compileFunctionCall(const ExprCall& call) {
-    // Compile function arguments
+    const std::string& func_name = call.func.name;
+
+    // Special case: einsum requires spec string as first arg
+    if (func_name == "einsum") {
+        if (call.args.size() < 2) {
+            return Result<uint16_t, CompilerError>::Err(
+                makeError(CompilerErrorKind::Semantic,
+                         "einsum requires at least 2 arguments: spec string and one or more tensors"));
+        }
+
+        // First argument must be a string literal (the einsum spec)
+        const Expr& first_arg = *call.args[0];
+        if (!std::holds_alternative<ExprString>(first_arg.node)) {
+            return Result<uint16_t, CompilerError>::Err(
+                makeError(CompilerErrorKind::Semantic,
+                         "einsum first argument must be a string literal (the spec)"));
+        }
+        const std::string& spec_equation = std::get<ExprString>(first_arg.node).literal.text;
+
+        // Compile remaining arguments (tensor inputs)
+        std::vector<uint16_t> input_regs;
+        for (size_t i = 1; i < call.args.size(); ++i) {
+            auto arg_result = compileExpression(*call.args[i]);
+            if (arg_result.isErr()) {
+                return Result<uint16_t, CompilerError>::Err(std::move(arg_result.error()));
+            }
+            input_regs.push_back(arg_result.value());
+        }
+
+        // Build EinsumSpec
+        EinsumSpec spec;
+        spec.equation = spec_equation;
+        spec.input_regs = input_regs;
+        // Note: Other fields (lhs_indices, rhs_indices, etc.) are optimization hints
+        // and can be parsed from the equation string later if needed
+
+        // Add spec to module (with deduplication)
+        uint32_t spec_id = module_.addEinsumSpec(spec);
+
+        // Allocate destination register
+        uint16_t dest_reg = registers_.allocate();
+
+        // Emit EINSUM instruction with reg_imm format (dest, spec_id)
+        emit(OpCode::EINSUM, dest_reg, spec_id);
+
+        return Result<uint16_t, CompilerError>::Ok(dest_reg);
+    }
+
+    // For other functions, compile all arguments first
     std::vector<uint16_t> arg_regs;
     for (const auto& arg : call.args) {
         auto arg_result = compileExpression(*arg);
@@ -353,8 +446,6 @@ Result<uint16_t, CompilerError> Compiler::compileFunctionCall(const ExprCall& ca
     uint16_t dest_reg = registers_.allocate();
 
     // Map function name to opcode
-    const std::string& func_name = call.func.name;
-
     if (func_name == "relu") {
         emit(OpCode::RELU, dest_reg, arg_regs[0]);
     } else if (func_name == "sigmoid" || func_name == "sig") {

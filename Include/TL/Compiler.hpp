@@ -257,6 +257,9 @@ private:
     /// Compile number literal
     Result<uint16_t, CompilerError> compileNumberLiteral(const NumberLiteral& lit);
 
+    /// Compile string literal
+    Result<uint16_t, CompilerError> compileStringLiteral(const StringLiteral& lit);
+
     /// Compile list literal (array)
     Result<uint16_t, CompilerError> compileListLiteral(const ExprList& lit);
 
