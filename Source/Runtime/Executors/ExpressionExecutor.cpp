@@ -302,103 +302,12 @@ const std::unordered_map<std::string, FunctionInfo> BUILTIN_FUNCTIONS = {
             Tensor a = evalExpr(bin->lhs, lhsCtx, env, backend);
             Tensor b = evalExpr(bin->rhs, lhsCtx, env, backend);
 
-            // Special handling for multiplication: if left operand was an indexed tensor reference
-            // and the result would have more dimensions than the LHS context expects,
-            // try to construct an einsum to contract over the extra dimensions
+            // Try einsum optimization for multiplication
             if (bin->op == Op::Mul) {
-                // Check if left operand is a simple tensor reference with free indices
-                const auto* leftRef = executor_utils::asExprTensorRef(bin->lhs);
-                if (leftRef) {
-                    // Collect free variable indices from left operand
-                    std::vector<std::string> leftIndices;
-                    for (const auto& ios : leftRef->ref.indices) {
-                        if (std::holds_alternative<Index>(ios.value)) {
-                            const auto& idx = std::get<Index>(ios.value);
-                            if (const auto* id = std::get_if<Identifier>(&idx.value)) {
-                                leftIndices.push_back(id->name);
-                            }
-                        }
-                    }
-
-                    // Collect free variable indices from LHS context
-                    std::vector<std::string> outIndices;
-                    for (const auto& ios : lhsCtx.indices) {
-                        if (std::holds_alternative<Index>(ios.value)) {
-                            const auto& idx = std::get<Index>(ios.value);
-                            if (const auto* id = std::get_if<Identifier>(&idx.value)) {
-                                outIndices.push_back(id->name);
-                            }
-                        }
-                    }
-
-                    // If we have indexed operations and dimensions match what we'd expect from einsum
-                    if (!leftIndices.empty() && a.dim() == static_cast<int64_t>(leftIndices.size()) &&
-                        b.dim() > 0) {
-                        // Try to construct einsum string
-                        // Left tensor has dimensions corresponding to leftIndices
-                        // Right tensor dimensions should map to indices that appear in leftIndices but not outIndices
-                        // (those are the contraction indices)
-
-                        // Build index mapping
-                        static const std::string pool = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-                        std::unordered_map<std::string, char> labelMap;
-                        size_t nextChar = 0;
-
-                        // Map left indices
-                        std::string leftSpec;
-                        for (const auto& idx : leftIndices) {
-                            if (labelMap.find(idx) == labelMap.end()) {
-                                if (nextChar >= pool.size()) goto fallback_multiply;
-                                labelMap[idx] = pool[nextChar++];
-                            }
-                            leftSpec += labelMap[idx];
-                        }
-
-                        // Map output indices
-                        std::string outSpec;
-                        for (const auto& idx : outIndices) {
-                            if (labelMap.find(idx) == labelMap.end()) {
-                                if (nextChar >= pool.size()) goto fallback_multiply;
-                                labelMap[idx] = pool[nextChar++];
-                            }
-                            outSpec += labelMap[idx];
-                        }
-
-                        // Right tensor: figure out its indices
-                        // It should have dimensions for indices that appear in leftIndices but not in outIndices
-                        std::string rightSpec;
-                        for (const auto& idx : leftIndices) {
-                            // Only include indices not in output (these get contracted)
-                            if (std::find(outIndices.begin(), outIndices.end(), idx) == outIndices.end()) {
-                                rightSpec += labelMap[idx];
-                            }
-                        }
-
-                        // Check if dimensions match and validate einsum indices
-                        if (!rightSpec.empty() && b.dim() == static_cast<int64_t>(rightSpec.size())) {
-                            // IMPORTANT: Validate that all output indices appear in at least one input
-                            // Without this check, we could generate invalid einsum specs like "ab,b->c"
-                            // where 'c' doesn't appear in any input operand
-                            bool validEinsum = true;
-                            for (char c : outSpec) {
-                                if (leftSpec.find(c) == std::string::npos && rightSpec.find(c) == std::string::npos) {
-                                    validEinsum = false;
-                                    break;
-                                }
-                            }
-
-                            if (validEinsum) {
-                                // Construct and execute einsum
-                                std::string spec = leftSpec + "," + rightSpec + "->" + outSpec;
-                                std::vector<Tensor> inputs = {a, b};
-                                return backend.einsum(spec, inputs);
-                            }
-                        }
-                    }
+                if (auto result = tryEinsumOptimization(bin, lhsCtx, a, b, env, backend)) {
+                    return *result;
                 }
             }
-
-            fallback_multiply:
             // Apply operation
             switch (bin->op) {
                 case Op::Add:
@@ -453,6 +362,106 @@ const std::unordered_map<std::string, FunctionInfo> BUILTIN_FUNCTIONS = {
         }
 
         throw ExecutionError("Unsupported expression node in ExpressionExecutor");
+    }
+
+    std::optional<Tensor> ExpressionExecutor::tryEinsumOptimization(
+        const ExprBinary* bin,
+        const TensorRef& lhsCtx,
+        const Tensor& a,
+        const Tensor& b,
+        Environment& env,
+        TensorBackend& backend) const {
+
+        // Check if left operand is a simple tensor reference with free indices
+        const auto* leftRef = executor_utils::asExprTensorRef(bin->lhs);
+        if (!leftRef) {
+            return std::nullopt;
+        }
+
+        // Collect free variable indices from left operand
+        std::vector<std::string> leftIndices;
+        for (const auto& ios : leftRef->ref.indices) {
+            if (std::holds_alternative<Index>(ios.value)) {
+                const auto& idx = std::get<Index>(ios.value);
+                if (const auto* id = std::get_if<Identifier>(&idx.value)) {
+                    leftIndices.push_back(id->name);
+                }
+            }
+        }
+
+        // Collect free variable indices from LHS context
+        std::vector<std::string> outIndices;
+        for (const auto& ios : lhsCtx.indices) {
+            if (std::holds_alternative<Index>(ios.value)) {
+                const auto& idx = std::get<Index>(ios.value);
+                if (const auto* id = std::get_if<Identifier>(&idx.value)) {
+                    outIndices.push_back(id->name);
+                }
+            }
+        }
+
+        // If we have indexed operations and dimensions match what we'd expect from einsum
+        if (leftIndices.empty() || a.dim() != static_cast<int64_t>(leftIndices.size()) || b.dim() == 0) {
+            return std::nullopt;
+        }
+
+        // Build index mapping
+        static const std::string pool = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        std::unordered_map<std::string, char> labelMap;
+        size_t nextChar = 0;
+
+        // Map left indices
+        std::string leftSpec;
+        for (const auto& idx : leftIndices) {
+            if (labelMap.find(idx) == labelMap.end()) {
+                if (nextChar >= pool.size()) {
+                    return std::nullopt; // Replaces goto fallback_multiply
+                }
+                labelMap[idx] = pool[nextChar++];
+            }
+            leftSpec += labelMap[idx];
+        }
+
+        // Map output indices
+        std::string outSpec;
+        for (const auto& idx : outIndices) {
+            if (labelMap.find(idx) == labelMap.end()) {
+                if (nextChar >= pool.size()) {
+                    return std::nullopt; // Replaces goto fallback_multiply
+                }
+                labelMap[idx] = pool[nextChar++];
+            }
+            outSpec += labelMap[idx];
+        }
+
+        // Right tensor: figure out its indices
+        // It should have dimensions for indices that appear in leftIndices but not in outIndices
+        std::string rightSpec;
+        for (const auto& idx : leftIndices) {
+            // Only include indices not in output (these get contracted)
+            if (std::find(outIndices.begin(), outIndices.end(), idx) == outIndices.end()) {
+                rightSpec += labelMap[idx];
+            }
+        }
+
+        // Check if dimensions match and validate einsum indices
+        if (rightSpec.empty() || b.dim() != static_cast<int64_t>(rightSpec.size())) {
+            return std::nullopt;
+        }
+
+        // IMPORTANT: Validate that all output indices appear in at least one input
+        // Without this check, we could generate invalid einsum specs like "ab,b->c"
+        // where 'c' doesn't appear in any input operand
+        for (char c : outSpec) {
+            if (leftSpec.find(c) == std::string::npos && rightSpec.find(c) == std::string::npos) {
+                return std::nullopt;
+            }
+        }
+
+        // Construct and execute einsum
+        std::string spec = leftSpec + "," + rightSpec + "->" + outSpec;
+        std::vector<Tensor> inputs = {a, b};
+        return backend.einsum(spec, inputs);
     }
 
     std::string ExpressionExecutor::name() const {

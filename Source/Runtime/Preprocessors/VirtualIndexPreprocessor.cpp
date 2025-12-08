@@ -193,8 +193,11 @@ struct DependencyGraph {
                             if (offset == eq_i.lhsVirtualOffset) {
                                 adjList[i].push_back(j);
                                 foundVirtualDep = true;
-                                goto next_j;  // Found dependency, move to next j
+                                break;  // Found dependency, exit offset loop
                             }
+                        }
+                        if (foundVirtualDep) {
+                            break;  // Exit key loop
                         }
                     }
                 }
@@ -219,8 +222,6 @@ struct DependencyGraph {
                         adjList[i].push_back(j);
                     }
                 }
-
-                next_j:;
             }
         }
     }
