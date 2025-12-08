@@ -13,6 +13,7 @@
 #include <unordered_set>
 #include <vector>
 #include <iostream>
+#include <filesystem>
 
 namespace tl {
 
@@ -89,6 +90,12 @@ private:
   void substituteVirtualIndexInExpr(Expr &expr, int concreteTimeStep);
   void initializeExecutors();
   void initializePreprocessors();
+
+  // File I/O operations
+  std::filesystem::path resolvePath(const std::string& path);
+  Tensor readTensorFromFile(const std::string& path);
+  void writeTensorToFile(const std::string& path, const Tensor& tensor);
+  void executeFileOperation(const FileOperation& fileOp);
 
   void debugLog(const std::string &msg) const;
 
