@@ -2,7 +2,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 #include "TL/Parser.hpp"
-#include "TL/vm.hpp"
+#include "TL/VM.hpp"
 #include <sstream>
 
 using namespace tl;

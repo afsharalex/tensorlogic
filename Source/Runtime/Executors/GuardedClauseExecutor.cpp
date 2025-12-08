@@ -1,7 +1,7 @@
 #include "TL/Runtime/Executors/GuardedClauseExecutor.hpp"
 #include "TL/Runtime/Executors/ExpressionExecutor.hpp"
 #include "TL/Runtime/ExecutorUtils.hpp"
-#include "TL/vm.hpp"
+#include "TL/VM.hpp"
 #include <torch/torch.h>
 #include <set>
 

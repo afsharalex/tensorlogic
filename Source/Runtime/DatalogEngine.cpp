@@ -1,5 +1,5 @@
 #include "TL/Runtime/DatalogEngine.hpp"
-#include "TL/vm.hpp"
+#include "TL/VM.hpp"
 #include <sstream>
 #include <unordered_set>
 #include <optional>

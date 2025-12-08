@@ -1,6 +1,6 @@
 #include "TL/Runtime/Executors/ExpressionExecutor.hpp"
 #include "TL/Runtime/ExecutorUtils.hpp"
-#include "TL/vm.hpp"
+#include "TL/VM.hpp"
 #include <torch/torch.h>
 #include <algorithm>
 #include <unordered_map>

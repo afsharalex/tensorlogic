@@ -1,5 +1,5 @@
 #include "TL/Runtime/Preprocessors/VirtualIndexPreprocessor.hpp"
-#include "TL/vm.hpp"
+#include "TL/VM.hpp"
 #include <torch/torch.h>
 #include <set>
 #include <map>

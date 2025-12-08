@@ -1,6 +1,6 @@
 #include "TL/Runtime/Executors/ScalarAssignExecutor.hpp"
 #include "TL/Runtime/ExecutorUtils.hpp"
-#include "TL/vm.hpp"
+#include "TL/VM.hpp"
 #include <stdexcept>
 
 namespace tl {
