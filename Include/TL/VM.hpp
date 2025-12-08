@@ -97,6 +97,16 @@ private:
   void writeTensorToFile(const std::string& path, const Tensor& tensor);
   void executeFileOperation(const FileOperation& fileOp);
 
+  // Statement partitioning
+  struct StatementPartition {
+    std::vector<Statement> virtualIndexed;
+    std::vector<Statement> nonVirtual;
+  };
+  StatementPartition partitionStatements(const Program& program);
+
+  // Statement dispatching
+  void dispatchStatement(const Statement& st);
+
   void debugLog(const std::string &msg) const;
 
   // Output streams for normal output and errors/debug

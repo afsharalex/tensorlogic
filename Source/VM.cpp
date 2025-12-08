@@ -182,60 +182,17 @@ void TensorLogicVM::execute(const Program &program) {
     debugLog("Total statements: " + std::to_string(program.statements.size()));
   }
 
-  // BATCH PREPROCESSING: Collect virtual-indexed statements for batch processing
-  std::vector<Statement> virtualIndexedStmts;
-  std::vector<size_t> virtualIndexedIndices;
-  std::vector<Statement> processedStatements;
-  std::vector<size_t> processedIndices;
-
-  // First pass: identify virtual-indexed statements
-  for (size_t i = 0; i < program.statements.size(); ++i) {
-    const auto &st = program.statements[i];
-
-    bool isVirtualIndexed = false;
-    if (std::holds_alternative<TensorEquation>(st)) {
-      const auto& eq = std::get<TensorEquation>(st);
-
-      // Check LHS for virtual indices
-      for (const auto& ios : eq.lhs.indices) {
-        // Check if it's an Index (not a Slice), then check if it's a VirtualIndex
-        if (std::holds_alternative<Index>(ios.value)) {
-          const auto& idx = std::get<Index>(ios.value);
-          if (std::holds_alternative<VirtualIndex>(idx.value)) {
-            isVirtualIndexed = true;
-            break;
-          }
-        }
-      }
-
-      // IMPORTANT: RHS-only virtual indices should NOT be batched
-      // They are handled by single-statement preprocessing which substitutes them with 0
-      // Only batch equations that have virtual indices on BOTH LHS and RHS (recurrent equations)
-      // Examples:
-      //   - State[i, *t+1] = W[i,j] State[j, *t] + Input[i, t]  -> BATCH (LHS has *t)
-      //   - Output = sigmoid(W_out[i] State[i, *5])  -> DON'T BATCH (only RHS has *5)
-
-      // Note: We already checked LHS above and found no virtual indices
-      // So this equation will go through normal preprocessing, not batch
-    }
-
-    if (isVirtualIndexed) {
-      virtualIndexedStmts.push_back(st);
-      virtualIndexedIndices.push_back(i);
-    } else {
-      processedStatements.push_back(st);
-      processedIndices.push_back(i);
-    }
-  }
+  // Partition statements into virtual-indexed and non-virtual
+  StatementPartition partition = partitionStatements(program);
 
   // IMPORTANT: Execute non-virtual statements first so tensors are defined
   // This allows getIterationCount to find driving tensors like Input
   if (debug_) {
-    debugLog("Executing " + std::to_string(processedStatements.size()) + " non-virtual statements first");
+    debugLog("Executing " + std::to_string(partition.nonVirtual.size()) + " non-virtual statements first");
   }
 
-  for (size_t i = 0; i < processedStatements.size(); ++i) {
-    const auto &st = processedStatements[i];
+  for (size_t i = 0; i < partition.nonVirtual.size(); ++i) {
+    const auto &st = partition.nonVirtual[i];
     if (debug_) {
       debugLog("Non-virtual stmt " + std::to_string(i) + ": " + toString(st));
     }
@@ -245,38 +202,20 @@ void TensorLogicVM::execute(const Program &program) {
 
     // THEN: Execute each preprocessed statement
     for (const auto &preprocessed_st : preprocessed) {
-      const BackendType be = router_.analyze(preprocessed_st);
       if (debug_ && preprocessed.size() > 1) {
         debugLog("  Preprocessed: " + toString(preprocessed_st));
       }
-
-      if (std::holds_alternative<TensorEquation>(preprocessed_st)) {
-        executeTensorEquation(std::get<TensorEquation>(preprocessed_st));
-      } else if (std::holds_alternative<FixedPointLoop>(preprocessed_st)) {
-        executeFixedPointLoop(std::get<FixedPointLoop>(preprocessed_st));
-      } else if (std::holds_alternative<DatalogFact>(preprocessed_st)) {
-        datalog_engine_.addFact(std::get<DatalogFact>(preprocessed_st));
-      } else if (std::holds_alternative<DatalogRule>(preprocessed_st)) {
-        datalog_engine_.addRule(std::get<DatalogRule>(preprocessed_st));
-      } else if (std::holds_alternative<FileOperation>(preprocessed_st)) {
-        executeFileOperation(std::get<FileOperation>(preprocessed_st));
-      } else if (std::holds_alternative<Query>(preprocessed_st)) {
-        // Queries are processed in a separate loop after saturation (see line ~459)
-        // Do nothing here - not an error
-      } else {
-        // Unknown statement kind
-        if (debug_) debugLog("Warning: Unknown statement type, skipping");
-      }
+      dispatchStatement(preprocessed_st);
     } // end for each preprocessed statement
   } // end for each non-virtual statement
 
   // NOW batch preprocess and execute virtual-indexed statements
   // At this point, tensors like Input should be defined
-  if (!virtualIndexedStmts.empty()) {
+  if (!partition.virtualIndexed.empty()) {
     if (debug_) {
-      debugLog("Batch preprocessing " + std::to_string(virtualIndexedStmts.size()) + " virtual-indexed statements");
+      debugLog("Batch preprocessing " + std::to_string(partition.virtualIndexed.size()) + " virtual-indexed statements");
     }
-    std::vector<Statement> expandedVirtual = VirtualIndexPreprocessor::preprocessBatch(virtualIndexedStmts, env_);
+    std::vector<Statement> expandedVirtual = VirtualIndexPreprocessor::preprocessBatch(partition.virtualIndexed, env_);
 
     if (debug_) {
       debugLog("Executing " + std::to_string(expandedVirtual.size()) + " expanded virtual statements");
@@ -938,6 +877,67 @@ void TensorLogicVM::executeFileOperation(const FileOperation& fo) {
       std::ostringstream oss; oss << "Wrote tensor " << Environment::key(fo.tensor) << " shape=" << src.sizes() << " to '" << fo.file.text << "'";
       debugLog(oss.str());
     }
+  }
+}
+
+TensorLogicVM::StatementPartition TensorLogicVM::partitionStatements(const Program& program) {
+  StatementPartition result;
+
+  for (const auto &st : program.statements) {
+    bool isVirtualIndexed = false;
+    if (std::holds_alternative<TensorEquation>(st)) {
+      const auto& eq = std::get<TensorEquation>(st);
+
+      // Check LHS for virtual indices
+      for (const auto& ios : eq.lhs.indices) {
+        // Check if it's an Index (not a Slice), then check if it's a VirtualIndex
+        if (std::holds_alternative<Index>(ios.value)) {
+          const auto& idx = std::get<Index>(ios.value);
+          if (std::holds_alternative<VirtualIndex>(idx.value)) {
+            isVirtualIndexed = true;
+            break;
+          }
+        }
+      }
+
+      // IMPORTANT: RHS-only virtual indices should NOT be batched
+      // They are handled by single-statement preprocessing which substitutes them with 0
+      // Only batch equations that have virtual indices on BOTH LHS and RHS (recurrent equations)
+      // Examples:
+      //   - State[i, *t+1] = W[i,j] State[j, *t] + Input[i, t]  -> BATCH (LHS has *t)
+      //   - Output = sigmoid(W_out[i] State[i, *5])  -> DON'T BATCH (only RHS has *5)
+      //
+      // Note: We already checked LHS above and found no virtual indices
+      // So this equation will go through normal preprocessing, not batch
+    }
+
+    if (isVirtualIndexed) {
+      result.virtualIndexed.push_back(st);
+    } else {
+      result.nonVirtual.push_back(st);
+    }
+  }
+
+  return result;
+}
+
+void TensorLogicVM::dispatchStatement(const Statement& st) {
+  if (std::holds_alternative<TensorEquation>(st)) {
+    executeTensorEquation(std::get<TensorEquation>(st));
+  } else if (std::holds_alternative<FixedPointLoop>(st)) {
+    executeFixedPointLoop(std::get<FixedPointLoop>(st));
+  } else if (std::holds_alternative<DatalogFact>(st)) {
+    datalog_engine_.addFact(std::get<DatalogFact>(st));
+  } else if (std::holds_alternative<DatalogRule>(st)) {
+    datalog_engine_.addRule(std::get<DatalogRule>(st));
+  } else if (std::holds_alternative<FileOperation>(st)) {
+    executeFileOperation(std::get<FileOperation>(st));
+  } else if (std::holds_alternative<Query>(st)) {
+    // Queries are processed in a separate loop after saturation
+    // Do nothing here - not an error
+  } else {
+    // Unknown statement kind
+    if (debug_) debugLog("Warning: Unknown statement type, skipping");
   }
 }
 
