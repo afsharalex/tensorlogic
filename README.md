@@ -29,7 +29,67 @@ Included in Repository here: **["Tensor Logic: The Language of AI"](Docs/Tensor%
 
 ## Documentation
 
-TODO: Add documentation
+See [Docs/CPACK_SETUP.md](Docs/CPACK_SETUP.md) for complete distribution and packaging documentation.
+
+## Installation
+
+### Pre-Built Binaries (Recommended)
+
+Download the latest release for your platform from [GitHub Releases](https://github.com/afsharalex/tensorlogic/releases):
+
+**macOS / Linux:**
+```bash
+# Extract the archive
+tar -xzf TensorLogic-0.1.0-*.tar.gz
+cd TensorLogic-0.1.0-*
+
+# Run the installer
+./install.sh
+
+# Or install to a custom location
+./install.sh --prefix=$HOME/.local
+
+# Test the installation
+tl --help
+```
+
+**Windows (PowerShell):**
+```powershell
+# Extract the archive
+Expand-Archive TensorLogic-0.1.0-win64.zip
+cd TensorLogic-0.1.0-win64
+
+# Run the installer (may require Administrator privileges)
+.\install.ps1
+
+# Or install to a custom location
+.\install.ps1 -Prefix "C:\Users\$env:USERNAME\TensorLogic"
+
+# Test the installation
+tl
+```
+
+### Docker
+
+For reproducible environments and CI/CD:
+
+```bash
+# Pull the official image (when available)
+docker pull ghcr.io/afsharalex/tensorlogic:latest
+
+# Or build locally
+docker build -t tensorlogic:latest .
+
+# Run a TensorLogic program
+docker run --rm -v $(pwd):/workspace tensorlogic:latest tl /workspace/program.tl
+
+# Interactive shell
+docker run --rm -it tensorlogic:latest bash
+```
+
+### Building from Source
+
+If pre-built binaries aren't available for your platform, you can build from source:
 
 ## Quick Start
 
@@ -234,6 +294,14 @@ cd build && ctest --output-on-failure
 
 # Install to system
 sudo cmake --install build --prefix /usr/local
+
+# Create distribution packages
+cd build
+cpack -C Release -G TGZ        # Create .tar.gz archive
+cpack -C Release -G ZIP        # Create .zip archive
+
+# Build Docker image
+docker build -t tensorlogic:latest .
 ```
 
 ### Architecture

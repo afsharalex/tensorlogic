@@ -1,0 +1,22 @@
+# Exclude build artifacts and cache directories
+build/
+.cache/
+*.log
+
+# Exclude IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Exclude git
+.git/
+.gitignore
+
+# Exclude macOS files
+.DS_Store
+
+# Exclude temporary files
+*.tmp
+*.bak
