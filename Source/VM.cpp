@@ -1,4 +1,5 @@
 #include "TL/VM.hpp"
+#include "TL/VMConfig.hpp"
 #include "TL/Runtime/Executors/ScalarAssignExecutor.hpp"
 #include "TL/Runtime/Executors/ListLiteralExecutor.hpp"
 #include "TL/Runtime/Executors/EinsumExecutor.hpp"
@@ -774,9 +775,9 @@ TensorEquation TensorLogicVM::substituteVirtualIndex(const TensorEquation &eq, i
 }
 
 void TensorLogicVM::executeFixedPointLoop(const FixedPointLoop &loop) {
-  constexpr int ABSOLUTE_MAX = ABSOLUTE_MAX_ITERS;  // 10000
-  constexpr int MAX_STABLE = MAX_CONSECUTIVE_STABLE;  // 10
-  constexpr float TOLERANCE = CONVERGENCE_TOLERANCE;  // 0.0001f
+  using VMConfig::ABSOLUTE_MAX_ITERS;
+  using VMConfig::MAX_CONSECUTIVE_STABLE;
+  using VMConfig::CONVERGENCE_TOLERANCE;
 
   int consecutiveStableCount = 0;
   int totalIterations = 0;
@@ -785,12 +786,12 @@ void TensorLogicVM::executeFixedPointLoop(const FixedPointLoop &loop) {
   if (debug_) {
     std::ostringstream oss;
     oss << "Fixed-point loop for " << loop.monitoredTensor
-        << " (tolerance=" << TOLERANCE
-        << ", maxStable=" << MAX_STABLE << ")";
+        << " (tolerance=" << CONVERGENCE_TOLERANCE
+        << ", maxStable=" << MAX_CONSECUTIVE_STABLE << ")";
     debugLog(oss.str());
   }
 
-  while (totalIterations < ABSOLUTE_MAX) {
+  while (totalIterations < ABSOLUTE_MAX_ITERS) {
     // Save previous state (after first iteration)
     if (totalIterations > 0 && env_.has(loop.monitoredTensor)) {
       prevState = env_.lookup(loop.monitoredTensor).clone();
@@ -809,11 +810,11 @@ void TensorLogicVM::executeFixedPointLoop(const FixedPointLoop &loop) {
       // Compute maximum absolute change across all elements
       float maxChange = (currentState - prevState).abs().max().item<float>();
 
-      if (maxChange <= TOLERANCE) {
+      if (maxChange <= CONVERGENCE_TOLERANCE) {
         // Value is stable - increment counter
         consecutiveStableCount++;
 
-        if (consecutiveStableCount >= MAX_STABLE) {
+        if (consecutiveStableCount >= MAX_CONSECUTIVE_STABLE) {
           // Converged! Exit loop
           if (debug_) {
             std::ostringstream oss;
@@ -833,7 +834,7 @@ void TensorLogicVM::executeFixedPointLoop(const FixedPointLoop &loop) {
   // Hit absolute maximum without convergence
   if (debug_) {
     std::ostringstream oss;
-    oss << "  Hit max iterations (" << ABSOLUTE_MAX
+    oss << "  Hit max iterations (" << ABSOLUTE_MAX_ITERS
         << ") without convergence";
     debugLog(oss.str());
   }
