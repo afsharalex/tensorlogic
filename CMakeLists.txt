@@ -117,3 +117,85 @@ set_target_properties(tl_tests PROPERTIES
 
 # Discover tests
 catch_discover_tests(tl_tests)
+
+# ===================================
+# Installation and Packaging
+# ===================================
+
+include(GNUInstallDirs)
+
+# Install main executable
+install(
+    TARGETS tl
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT Application
+)
+
+# Install libtorch dependencies
+install(
+    DIRECTORY ${CMAKE_BINARY_DIR}/_deps/libtorch-src/lib/
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT Runtime
+    FILES_MATCHING
+        PATTERN "*.so*"      # Linux
+        PATTERN "*.dylib"    # macOS
+        PATTERN "*.dll"      # Windows
+    PATTERN "*.a" EXCLUDE    # Exclude static libraries
+)
+
+# Install example programs
+install(
+    DIRECTORY Examples/Programs
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/tensorlogic/examples
+    COMPONENT Examples
+    FILES_MATCHING PATTERN "*.tl"
+)
+
+# Install documentation
+install(
+    FILES README.md Docs/Grammar.bnf
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}
+    COMPONENT Documentation
+)
+
+# Install installation scripts at archive root
+install(
+    FILES install.sh install.ps1
+    DESTINATION .
+    PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE
+    COMPONENT Application
+)
+
+# ===================================
+# CPack Configuration
+# ===================================
+
+# Basic package information
+set(CPACK_PACKAGE_NAME "TensorLogic")
+set(CPACK_PACKAGE_VENDOR "TensorLogic Project")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Unified programming language for AI bridging neural networks and symbolic reasoning")
+set(CPACK_PACKAGE_VERSION_MAJOR "0")
+set(CPACK_PACKAGE_VERSION_MINOR "1")
+set(CPACK_PACKAGE_VERSION_PATCH "0")
+set(CPACK_PACKAGE_VERSION "${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
+
+# Package file name
+set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${CMAKE_SYSTEM_NAME}")
+
+# Resources
+set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
+
+# Platform-specific generator selection
+if(WIN32)
+    set(CPACK_GENERATOR "ZIP")
+elseif(APPLE)
+    set(CPACK_GENERATOR "TGZ")
+else()
+    set(CPACK_GENERATOR "TGZ")
+endif()
+
+# Archive-specific settings
+set(CPACK_ARCHIVE_COMPONENT_INSTALL OFF)  # Include all components in single archive
+
+# Must be last
+include(CPack)
