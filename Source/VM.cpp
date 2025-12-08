@@ -24,8 +24,6 @@
 
 namespace tl {
 
-// -------- Environment --------
-
 void Environment::bind(const std::string &name, const Tensor &t) {
   tensors_[name] = t;
 }
@@ -102,13 +100,11 @@ bool Environment::hasRelation(const std::string &relation) const {
 }
 
 const std::vector<std::vector<std::string>> &Environment::facts(const std::string &relation) const {
-  static const std::vector<std::vector<std::string>> kEmpty;
+  static const std::vector<std::vector<std::string>> EMPTY_RELATION;
   auto it = datalog_.find(relation);
-  if (it == datalog_.end()) return kEmpty;
+  if (it == datalog_.end()) return EMPTY_RELATION;
   return it->second;
 }
-
-// -------- BackendRouter --------
 
 BackendType BackendRouter::analyze(const Statement &st) {
   // Phase 1: Tensor equations go to LibTorch. Others ignored for now.
@@ -117,8 +113,6 @@ BackendType BackendRouter::analyze(const Statement &st) {
   }
   return BackendType::LibTorch; // default
 }
-
-// -------- TensorLogicVM --------
 
 TensorLogicVM::TensorLogicVM(std::ostream* out, std::ostream* err)
   : output_stream_(out), error_stream_(err), datalog_engine_(env_, out) {
@@ -256,7 +250,7 @@ void TensorLogicVM::execute(const Program &program) {
       }
 
       if (std::holds_alternative<TensorEquation>(preprocessed_st)) {
-        execTensorEquation(std::get<TensorEquation>(preprocessed_st));
+        executeTensorEquation(std::get<TensorEquation>(preprocessed_st));
       } else if (std::holds_alternative<FixedPointLoop>(preprocessed_st)) {
         executeFixedPointLoop(std::get<FixedPointLoop>(preprocessed_st));
       } else if (std::holds_alternative<DatalogFact>(preprocessed_st)) {
@@ -272,8 +266,9 @@ void TensorLogicVM::execute(const Program &program) {
         const std::filesystem::path cwd = std::filesystem::current_path();
         std::filesystem::path candidate = cwd / path;
         if (std::filesystem::exists(candidate)) return candidate;
-        // TODO: Should we throw here?
-        // Fall back to as-is
+        // File doesn't exist relative to CWD - return candidate path anyway.
+        // For reads: will throw when opening fails (line 277).
+        // For writes: file will be created (no error needed).
         return candidate;
       };
 
@@ -439,7 +434,7 @@ void TensorLogicVM::execute(const Program &program) {
         }
 
         try {
-          execTensorEquation(eq);
+          executeTensorEquation(eq);
         } catch (const std::exception& e) {
           if (debug_) {
             debugLog("ERROR executing virtual stmt " + std::to_string(i));
@@ -466,7 +461,7 @@ void TensorLogicVM::execute(const Program &program) {
       } else if (std::holds_alternative<Query>(st)) {
         // Ensure closure is up-to-date before answering queries
         datalog_engine_.saturate();
-        execQuery(std::get<Query>(st));
+        executeQuery(std::get<Query>(st));
       }
     }
   }
@@ -477,7 +472,7 @@ void TensorLogicVM::execute(const Program &program) {
     if (std::holds_alternative<Query>(st)) {
       // Ensure closure is up-to-date before answering queries
       datalog_engine_.saturate();
-      execQuery(std::get<Query>(st));
+      executeQuery(std::get<Query>(st));
     }
   }
 }
@@ -519,7 +514,7 @@ static bool resolveConcreteIndices(const TensorRef& ref,
   return true;
 }
 
-void TensorLogicVM::execTensorEquation(const TensorEquation &eq) {
+void TensorLogicVM::executeTensorEquation(const TensorEquation &eq) {
   // New refactored version using ExecutorRegistry
   try {
     std::string lhsName = Environment::key(eq.lhs);
@@ -803,7 +798,7 @@ void TensorLogicVM::executeFixedPointLoop(const FixedPointLoop &loop) {
 
     // Execute one iteration by substituting virtual index with concrete timestep
     TensorEquation expandedEq = substituteVirtualIndex(loop.equation, totalIterations);
-    execTensorEquation(expandedEq);
+    executeTensorEquation(expandedEq);
 
     totalIterations++;
 
@@ -844,7 +839,7 @@ void TensorLogicVM::executeFixedPointLoop(const FixedPointLoop &loop) {
   }
 }
 
-void TensorLogicVM::execQuery(const Query &q) {
+void TensorLogicVM::executeQuery(const Query &q) {
   using torch::indexing::TensorIndex;
 
   // Handle learning directives

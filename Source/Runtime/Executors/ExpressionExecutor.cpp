@@ -3,8 +3,42 @@
 #include "TL/vm.hpp"
 #include <torch/torch.h>
 #include <algorithm>
+#include <unordered_map>
+#include <functional>
 
 namespace tl {
+
+namespace {
+
+// Registry of built-in functions with their arity and implementation
+struct FunctionInfo {
+    int arity;
+    std::function<torch::Tensor(const std::vector<torch::Tensor>&)> impl;
+};
+
+const std::unordered_map<std::string, FunctionInfo> BUILTIN_FUNCTIONS = {
+    {"relu",    {1, [](const auto& args) { return torch::relu(args[0]); }}},
+    {"sigmoid", {1, [](const auto& args) { return torch::sigmoid(args[0]); }}},
+    {"tanh",    {1, [](const auto& args) { return torch::tanh(args[0]); }}},
+    {"sqrt",    {1, [](const auto& args) { return torch::sqrt(args[0]); }}},
+    {"abs",     {1, [](const auto& args) { return torch::abs(args[0]); }}},
+    {"exp",     {1, [](const auto& args) { return torch::exp(args[0]); }}},
+    {"log",     {1, [](const auto& args) { return torch::log(args[0]); }}},
+    {"sin",     {1, [](const auto& args) { return torch::sin(args[0]); }}},
+    {"cos",     {1, [](const auto& args) { return torch::cos(args[0]); }}},
+    {"tan",     {1, [](const auto& args) { return torch::tan(args[0]); }}},
+    {"asin",    {1, [](const auto& args) { return torch::asin(args[0]); }}},
+    {"acos",    {1, [](const auto& args) { return torch::acos(args[0]); }}},
+    {"atan",    {1, [](const auto& args) { return torch::atan(args[0]); }}},
+    {"step",    {1, [](const auto& args) { return torch::gt(args[0], 0).to(torch::kFloat32); }}},
+    {"softmax", {1, [](const auto& args) {
+        const auto& x = args[0];
+        if (x.dim() == 0) return torch::tensor(1.0f);
+        return torch::softmax(x, std::max<int64_t>(0, x.dim() - 1));
+    }}},
+};
+
+}  // anonymous namespace
 
     bool ExpressionExecutor::canExecute(const TensorEquation &eq, const Environment &env) const {
         // Only handle standard assignment (=)
@@ -87,7 +121,11 @@ namespace tl {
             double v = 0.0;
             try {
                 v = std::stod(num->literal.text);
-            } catch (...) {}
+            } catch (const std::invalid_argument& e) {
+                throw ExecutionError("Invalid number format '" + num->literal.text + "': " + e.what());
+            } catch (const std::out_of_range& e) {
+                throw ExecutionError("Number out of range '" + num->literal.text + "': " + e.what());
+            }
             return torch::tensor(static_cast<float>(v));
         }
 
@@ -204,80 +242,28 @@ namespace tl {
             return torch::tensor(data).reshape(shape);
         }
 
-        // TODO: Clean this up with a map str->torch::func
-        // Handle function calls
+        // Handle function calls using registry
         if (const auto* call = std::get_if<ExprCall>(&e.node)) {
-            auto need1 = [&](const char* fname) {
-                if (call->args.size() != 1) {
-                    throw ExecutionError(std::string(fname) + "() expects 1 argument");
-                }
-            };
-
-            if (call->func.name == "step") {
-                need1("step");
-                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
-                return torch::gt(x, 0).to(torch::kFloat32);
-            } else if (call->func.name == "sqrt") {
-                need1("sqrt");
-                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
-                return torch::sqrt(x);
-            } else if (call->func.name == "abs") {
-                need1("abs");
-                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
-                return torch::abs(x);
-            } else if (call->func.name == "sigmoid") {
-                need1("sigmoid");
-                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
-                return torch::sigmoid(x);
-            } else if (call->func.name == "tanh") {
-                need1("tanh");
-                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
-                return torch::tanh(x);
-            } else if (call->func.name == "relu") {
-                need1("relu");
-                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
-                return torch::relu(x);
-            } else if (call->func.name == "exp") {
-                need1("exp");
-                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
-                return torch::exp(x);
-            } else if (call->func.name == "softmax") {
-                need1("softmax");
-                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
-                if (x.dim() == 0) return torch::tensor(1.0f);
-                int64_t dim = std::max<int64_t>(0, x.dim() - 1);
-                return torch::softmax(x, dim);
-            } else if (call->func.name == "cos") {
-                need1("cos");
-                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
-                return torch::cos(x);
-            } else if (call->func.name == "sin") {
-                need1("sin");
-                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
-                return torch::sin(x);
-            } else if (call->func.name == "tan") {
-                need1("tan");
-                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
-                return torch::tan(x);
-            } else if (call->func.name == "acos") {
-                need1("acos");
-                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
-                return torch::acos(x);
-            } else if (call->func.name == "asin") {
-                need1("asin");
-                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
-                return torch::asin(x);
-            } else if (call->func.name == "atan") {
-                need1("atan");
-                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
-                return torch::atan(x);
-            } else if (call->func.name == "log") {
-                need1("log");
-                Tensor x = evalExpr(call->args[0], lhsCtx, env, backend);
-                return torch::log(x);
+            auto it = BUILTIN_FUNCTIONS.find(call->func.name);
+            if (it == BUILTIN_FUNCTIONS.end()) {
+                throw ExecutionError("Unknown function: '" + call->func.name + "'");
             }
 
-            throw ExecutionError("Unsupported function: " + call->func.name);
+            const auto& funcInfo = it->second;
+            if (call->args.size() != static_cast<size_t>(funcInfo.arity)) {
+                throw ExecutionError(
+                    call->func.name + "() expects " + std::to_string(funcInfo.arity) +
+                    " argument(s), got " + std::to_string(call->args.size()));
+            }
+
+            // Evaluate arguments
+            std::vector<Tensor> args;
+            args.reserve(call->args.size());
+            for (const auto& arg : call->args) {
+                args.push_back(evalExpr(arg, lhsCtx, env, backend));
+            }
+
+            return funcInfo.impl(args);
         }
 
         // Handle binary operations

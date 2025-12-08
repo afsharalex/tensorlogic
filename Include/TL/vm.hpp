@@ -82,8 +82,8 @@ public:
   const Environment &env() const { return env_; }
 
 private:
-  void execTensorEquation(const TensorEquation &eq);
-  void execQuery(const Query &q);
+  void executeTensorEquation(const TensorEquation &eq);
+  void executeQuery(const Query &q);
   void executeFixedPointLoop(const FixedPointLoop &loop);
   TensorEquation substituteVirtualIndex(const TensorEquation &eq, int concreteTimeStep);
   void substituteVirtualIndexInExpr(Expr &expr, int concreteTimeStep);
