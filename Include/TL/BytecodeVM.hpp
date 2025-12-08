@@ -6,7 +6,7 @@
 
 #include "TL/Bytecode.hpp"
 #include "TL/backend.hpp"
-#include "TL/vm.hpp"
+#include "TL/VM.hpp"
 #include <vector>
 #include <map>
 #include <iostream>

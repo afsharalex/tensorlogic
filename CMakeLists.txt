@@ -79,6 +79,7 @@ add_executable(tl_tests
     Tests/Unit/test_learning_directives.cpp
     Tests/Unit/test_virtual_indexing.cpp
     Tests/Unit/test_bytecode.cpp
+    Tests/Unit/test_bytecode_vm.cpp
 
     # Source files needed for tests
     Source/Parser.cpp

@@ -3,7 +3,7 @@
 
 #include "TL/Compiler.hpp"
 #include "TL/VisitorUtils.hpp"
-#include "TL/vm.hpp"
+#include "TL/VM.hpp"
 #include <iostream>
 #include <sstream>
 #include <algorithm>
