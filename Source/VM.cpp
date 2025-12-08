@@ -187,101 +187,14 @@ void TensorLogicVM::execute(const Program &program) {
 
   // IMPORTANT: Execute non-virtual statements first so tensors are defined
   // This allows getIterationCount to find driving tensors like Input
-  if (debug_) {
-    debugLog("Executing " + std::to_string(partition.nonVirtual.size()) + " non-virtual statements first");
-  }
-
-  for (size_t i = 0; i < partition.nonVirtual.size(); ++i) {
-    const auto &st = partition.nonVirtual[i];
-    if (debug_) {
-      debugLog("Non-virtual stmt " + std::to_string(i) + ": " + toString(st));
-    }
-
-    // FIRST: Preprocess statement (for non-virtual preprocessors)
-    auto preprocessed = preprocessor_registry_.preprocess(st, env_);
-
-    // THEN: Execute each preprocessed statement
-    for (const auto &preprocessed_st : preprocessed) {
-      if (debug_ && preprocessed.size() > 1) {
-        debugLog("  Preprocessed: " + toString(preprocessed_st));
-      }
-      dispatchStatement(preprocessed_st);
-    } // end for each preprocessed statement
-  } // end for each non-virtual statement
+  executeNonVirtualStatements(partition.nonVirtual);
 
   // NOW batch preprocess and execute virtual-indexed statements
   // At this point, tensors like Input should be defined
-  if (!partition.virtualIndexed.empty()) {
-    if (debug_) {
-      debugLog("Batch preprocessing " + std::to_string(partition.virtualIndexed.size()) + " virtual-indexed statements");
-    }
-    std::vector<Statement> expandedVirtual = VirtualIndexPreprocessor::preprocessBatch(partition.virtualIndexed, env_);
-
-    if (debug_) {
-      debugLog("Executing " + std::to_string(expandedVirtual.size()) + " expanded virtual statements");
-    }
-
-    for (size_t i = 0; i < expandedVirtual.size(); ++i) {
-      const auto &st = expandedVirtual[i];
-
-      if (std::holds_alternative<TensorEquation>(st)) {
-        const auto& eq = std::get<TensorEquation>(st);
-        if (debug_) {
-          std::ostringstream oss;
-          oss << "Virtual stmt " << i << ": " << Environment::key(eq.lhs) << " = ...";
-
-          // Show LHS tensor shape if it exists
-          std::string lhsName = Environment::key(eq.lhs);
-          if (env_.has(lhsName)) {
-            oss << " (existing shape: " << env_.lookup(lhsName).sizes() << ")";
-          } else {
-            oss << " (new tensor)";
-          }
-          debugLog(oss.str());
-        }
-
-        try {
-          executeTensorEquation(eq);
-        } catch (const std::exception& e) {
-          if (debug_) {
-            debugLog("ERROR executing virtual stmt " + std::to_string(i));
-            debugLog("  LHS: " + Environment::key(eq.lhs));
-            debugLog("  Error: " + std::string(e.what()));
-          }
-          throw;
-        }
-      } else if (std::holds_alternative<FixedPointLoop>(st)) {
-        const auto& loop = std::get<FixedPointLoop>(st);
-        if (debug_) {
-          debugLog("Virtual stmt " + std::to_string(i) + ": FixedPointLoop for " + loop.monitoredTensor);
-        }
-        try {
-          executeFixedPointLoop(loop);
-        } catch (const std::exception& e) {
-          if (debug_) {
-            debugLog("ERROR executing fixed-point loop " + std::to_string(i));
-            debugLog("  Monitored tensor: " + loop.monitoredTensor);
-            debugLog("  Error: " + std::string(e.what()));
-          }
-          throw;
-        }
-      } else if (std::holds_alternative<Query>(st)) {
-        // Ensure closure is up-to-date before answering queries
-        datalog_engine_.saturate();
-        executeQuery(std::get<Query>(st));
-      }
-    }
-  }
+  executeVirtualIndexedStatements(partition.virtualIndexed);
 
   // Finally, execute any remaining queries that weren't virtual-indexed
-  for (size_t i = 0; i < program.statements.size(); ++i) {
-    const auto &st = program.statements[i];
-    if (std::holds_alternative<Query>(st)) {
-      // Ensure closure is up-to-date before answering queries
-      datalog_engine_.saturate();
-      executeQuery(std::get<Query>(st));
-    }
-  }
+  processRemainingQueries(program);
 }
 
 // Resolve indices to concrete integer positions using either numeric indices
@@ -938,6 +851,106 @@ void TensorLogicVM::dispatchStatement(const Statement& st) {
   } else {
     // Unknown statement kind
     if (debug_) debugLog("Warning: Unknown statement type, skipping");
+  }
+}
+
+void TensorLogicVM::executeNonVirtualStatements(const std::vector<Statement>& statements) {
+  if (debug_) {
+    debugLog("Executing " + std::to_string(statements.size()) + " non-virtual statements first");
+  }
+
+  for (size_t i = 0; i < statements.size(); ++i) {
+    const auto &st = statements[i];
+    if (debug_) {
+      debugLog("Non-virtual stmt " + std::to_string(i) + ": " + toString(st));
+    }
+
+    // FIRST: Preprocess statement (for non-virtual preprocessors)
+    auto preprocessed = preprocessor_registry_.preprocess(st, env_);
+
+    // THEN: Execute each preprocessed statement
+    for (const auto &preprocessed_st : preprocessed) {
+      if (debug_ && preprocessed.size() > 1) {
+        debugLog("  Preprocessed: " + toString(preprocessed_st));
+      }
+      dispatchStatement(preprocessed_st);
+    }
+  }
+}
+
+void TensorLogicVM::executeVirtualIndexedStatements(const std::vector<Statement>& statements) {
+  if (statements.empty()) return;
+
+  if (debug_) {
+    debugLog("Batch preprocessing " + std::to_string(statements.size()) + " virtual-indexed statements");
+  }
+  std::vector<Statement> expandedVirtual = VirtualIndexPreprocessor::preprocessBatch(statements, env_);
+
+  if (debug_) {
+    debugLog("Executing " + std::to_string(expandedVirtual.size()) + " expanded virtual statements");
+  }
+
+  for (size_t i = 0; i < expandedVirtual.size(); ++i) {
+    const auto &st = expandedVirtual[i];
+
+    if (std::holds_alternative<TensorEquation>(st)) {
+      const auto& eq = std::get<TensorEquation>(st);
+      if (debug_) {
+        std::ostringstream oss;
+        oss << "Virtual stmt " << i << ": " << Environment::key(eq.lhs) << " = ...";
+
+        // Show LHS tensor shape if it exists
+        std::string lhsName = Environment::key(eq.lhs);
+        if (env_.has(lhsName)) {
+          oss << " (existing shape: " << env_.lookup(lhsName).sizes() << ")";
+        } else {
+          oss << " (new tensor)";
+        }
+        debugLog(oss.str());
+      }
+
+      try {
+        executeTensorEquation(eq);
+      } catch (const std::exception& e) {
+        if (debug_) {
+          debugLog("ERROR executing virtual stmt " + std::to_string(i));
+          debugLog("  LHS: " + Environment::key(eq.lhs));
+          debugLog("  Error: " + std::string(e.what()));
+        }
+        throw;
+      }
+    } else if (std::holds_alternative<FixedPointLoop>(st)) {
+      const auto& loop = std::get<FixedPointLoop>(st);
+      if (debug_) {
+        debugLog("Virtual stmt " + std::to_string(i) + ": FixedPointLoop for " + loop.monitoredTensor);
+      }
+      try {
+        executeFixedPointLoop(loop);
+      } catch (const std::exception& e) {
+        if (debug_) {
+          debugLog("ERROR executing fixed-point loop " + std::to_string(i));
+          debugLog("  Monitored tensor: " + loop.monitoredTensor);
+          debugLog("  Error: " + std::string(e.what()));
+        }
+        throw;
+      }
+    } else if (std::holds_alternative<Query>(st)) {
+      // Ensure closure is up-to-date before answering queries
+      datalog_engine_.saturate();
+      executeQuery(std::get<Query>(st));
+    }
+  }
+}
+
+void TensorLogicVM::processRemainingQueries(const Program& program) {
+  // Finally, execute any remaining queries that weren't virtual-indexed
+  for (size_t i = 0; i < program.statements.size(); ++i) {
+    const auto &st = program.statements[i];
+    if (std::holds_alternative<Query>(st)) {
+      // Ensure closure is up-to-date before answering queries
+      datalog_engine_.saturate();
+      executeQuery(std::get<Query>(st));
+    }
   }
 }
 

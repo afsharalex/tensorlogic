@@ -107,6 +107,11 @@ private:
   // Statement dispatching
   void dispatchStatement(const Statement& st);
 
+  // Execution loops
+  void executeNonVirtualStatements(const std::vector<Statement>& statements);
+  void executeVirtualIndexedStatements(const std::vector<Statement>& statements);
+  void processRemainingQueries(const Program& program);
+
   void debugLog(const std::string &msg) const;
 
   // Output streams for normal output and errors/debug
