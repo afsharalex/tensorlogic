@@ -11,16 +11,16 @@
 
 TensorLogic treats logical rules and Einstein summation as fundamentally equivalent operations, enabling scalable, learnable, and transparent AI systems. The language is built around a single construct: **tensor equations**.
 
-See the Grammar in [Docs/Grammar.bnf](Docs/Grammar.bnf).
+See the Grammar in [Docs/GrammarV3.bnf](Docs/GrammarV3.bnf).
 
 ## Key Features
 
-- 🔄 **Unified Neural-Symbolic AI**: Single syntax for both neural networks and logic programs
-- 🎯 **Automatic Differentiation**: All tensor equations are differentiable via PyTorch
-- 🚀 **GPU Acceleration**: Leverages libtorch for CPU/GPU/MPS computation
-- 📊 **Datalog Compatible**: Accepts standard Datalog syntax
-- 🧮 **Einstein Summation**: Shared indices imply automatic summation
-- 🔍 **Transparent Reasoning**: Forward and backward chaining inference
+- **Unified Neural-Symbolic AI**: Single syntax for both neural networks and logic programs
+- **Automatic Differentiation**: All tensor equations are differentiable via PyTorch
+- **GPU Acceleration**: Leverages libtorch for CPU/GPU/MPS computation
+- **Datalog Compatible**: Accepts standard Datalog syntax
+- **Einstein Summation**: Shared indices imply automatic summation
+- **Transparent Reasoning**: Forward and backward chaining inference
 
 ## Original Paper
 
@@ -185,9 +185,9 @@ tensorlogic/
 │   ├── FetchLibTorch.cmake  # Downloads libtorch binaries
 │   ├── FetchPEGTL.cmake     # Fetches PEGTL parser library
 │   └── FetchCatch2.cmake    # Fetches Catch2 testing framework
-├── docs/             # Documentation
-│   └── Tensor Logic - The Language of AI.pdf  # Original paper
-│   └── Grammar.bnf    # Grammar definition
+├── Docs/             # Documentation
+│   ├── Tensor Logic - The Language of AI.pdf  # Original paper
+│   └── GrammarV3.bnf  # Grammar definition
 ├── build/            # Build artifacts (gitignored)
 │   ├── tl            # Main executable
 │   ├── tl_tests      # Test executable
